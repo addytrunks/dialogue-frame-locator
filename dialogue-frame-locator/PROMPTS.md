@@ -216,3 +216,28 @@ VALIDATION (§17.1, §21 Phase 5):
 Ok, am i good to proceed to the next phase? Any bugs or concerns from your side? Anything that might cause problems later?
 yes, do the follow-up commit for 3, 4 and 5, and as for 1 i would go for hard rejection/ hard downgrade, what do you think?
 its own commit before Phase 6, and yes i would prefer it as AMBIGUOUS.
+
+---
+
+## Phase 6 — Pipeline Wiring & CLI
+
+You're implementing Phase 6 (pipeline wiring + CLI) — the first true end-to-end integration. Read DESIGN.md §4.3, §4.5, and §19.1 in full, then read the actual interfaces/modules produced in Phases 0-5 (not DESIGN.md's pseudocode) before writing anything, since real signatures may have drifted from the design doc.
+
+STANDING RULES:
+- Scope for THIS phase only: wire MediaResolver → MediaLoader → Detector → refine → FrameExtractor → confidence into pipeline.py, and expose it via cli.py per §4.3's contract (flags, human-readable output, --json, exit codes 0/2/3/4).
+- No OCR, no job queue, no HTTP API — the CLI is the only interface for v1 (§4.4).
+- This phase is where real OpenRouter cost and the real ok.ru fetch actually happen together for the first time. Run the real example once manually — url https://ok.ru/video/248244667877, dialogue "My mind rebels at stagnation" — and eyeball the output; don't write an automated test that asserts exact values against the live API (nondeterministic). Use tolerance-band assertions per §17.4 for any automated E2E test, and use synthetic media (Phase 2/5 style) for anything that needs to be exact and reproducible in CI.
+- Do not write or edit DECISIONS.md.
+- Before writing code, append this entire prompt verbatim to PROMPTS.md under "## Phase 6 — Pipeline Wiring & CLI".
+- When done, summarize (including the real-example run's actual output) and STOP — don't start Phase 7.
+- Commit only this phase's work: "Phase 6: pipeline wiring and CLI".
+
+BUILD:
+- pipeline.py: the orchestrator, depending only on the interfaces (Detector, AsrProvider, PhraseMatcher, FrameExtractor) — no concrete imports, per §16.2.
+- cli.py: full implementation of §4.3's contract, including human-readable default output (Status/Timestamp/Frame/Text/Confidence/Image) and --json emitting the §4.1 result object.
+- Error handling per §11: every stage failure maps to a typed PROCESSING_ERROR with the right exit code; temp files cleaned up in all cases.
+
+VALIDATION (§17.3, §21 Phase 6):
+- Synthetic end-to-end test: TTS phrase inserted at a known timestamp over a known frame pattern → CLI run → assert status=FOUND, onset within ±1 frame, correct frame_number, PNG written, exit code 0.
+- Real run on the ok.ru example (manual, not CI) produces a plausible, inspectable frame — report what you actually got (timestamp, frame, matched text, confidence) in your summary so I can sanity-check it against the ~5:34 mark I already confirmed by ear.
+- At minimum, one test each for NOT_FOUND, AMBIGUOUS, and PROCESSING_ERROR (bad URL) end-to-end paths.

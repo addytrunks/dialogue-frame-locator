@@ -121,12 +121,16 @@ class CascadeMatcher:
         score = weighted / weight_total if weight_total > 0 else 0.0
 
         candidate_text = " ".join(w.word.text.strip() for w in window)
+        extra: dict[str, float] = {"lexical": lexical, "phonetic": phonetic}
+        avg_confidence = _avg_word_confidence(window)
+        if avg_confidence is not None:
+            extra["avg_word_confidence"] = avg_confidence
         candidate = Candidate(
             start_time=window[0].word.start,
             end_time=window[-1].word.end,
             text=candidate_text,
             score=score,
-            extra={"lexical": lexical, "phonetic": phonetic},
+            extra=extra,
         )
         return score, candidate
 
@@ -192,6 +196,24 @@ def _lexical_score(query_tokens: list[str], window_tokens: list[str]) -> float:
     char_ratio = difflib.SequenceMatcher(None, " ".join(query_tokens), " ".join(window_tokens)).ratio()
 
     return token_overlap_ratio * char_ratio
+
+
+def _avg_word_confidence(window: list[_Token]) -> float | None:
+    """Average of the underlying Words' native confidence (§10.5), when reported.
+
+    Deduplicated by Word identity first: a contraction can expand into several
+    tokens that all share one origin Word (§8.1's ``normalize_word``), and
+    counting that Word's confidence once per token would over-weight it.
+    Returns None (never a synthesized 0.0) when no word in the window reports
+    a confidence at all, so confidence.py's presence check correctly treats
+    the signal as unavailable rather than as "the provider is certain of
+    nothing."
+    """
+    by_word_id = {id(t.word): t.word.confidence for t in window}
+    confidences = [c for c in by_word_id.values() if c is not None]
+    if not confidences:
+        return None
+    return sum(confidences) / len(confidences)
 
 
 def _phonetic_score(query_tokens: list[str], window_tokens: list[str]) -> float:

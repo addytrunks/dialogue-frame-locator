@@ -1,25 +1,26 @@
 """AsrDetector — implements Detector using an AsrProvider (DESIGN.md §4.2, §16.2).
 
-Scope for this phase (§21 Phase 3): audio -> word-level timestamped
-transcript -> Candidates. The matching here is deliberately a minimal
-normalized exact/substring search over the merged word stream — layer 1 of
-§8.2's cascade — not the fuzzy/phonetic/semantic matching stack, which is
-Phase 4's job (match/matcher.py). This is enough to prove chunking, de-dup,
-and failover produce correct, non-duplicated candidates; matching quality
-is `PhraseMatcher`'s concern once it exists.
+Audio -> word-level timestamped transcript -> Candidates, via a ``PhraseMatcher``
+(DESIGN.md §16.2: "pipeline.py ... depends solely on the interfaces (Detector,
+AsrProvider, PhraseMatcher, FrameExtractor)" — this class is where AsrProvider
+and PhraseMatcher actually meet). Phase 3 shipped this with its own minimal
+normalized exact/substring search — layer 1 of §8.2's cascade only — as a
+deliberate placeholder ("matching quality is PhraseMatcher's concern once it
+exists"). Phase 6 wires the real cascade in: once chunking/merge produces one
+global-timeline transcript, matching is delegated to the injected
+``PhraseMatcher`` (in practice ``match.matcher.CascadeMatcher``) rather than
+reimplemented here.
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
-from dfl.asr.base import AsrProvider, Word
+from dfl.asr.base import AsrProvider, WordTimedTranscript
 from dfl.asr.chunking import AudioChunk, merge_transcripts
 from dfl.contracts import Candidate, MediaHandle
-
-_PUNCT_RE = re.compile(r"[^\w\s]")
+from dfl.match.matcher import PhraseMatcher
 
 
 @dataclass(frozen=True)
@@ -31,26 +32,38 @@ class AsrDetectorOptions:
 class AsrDetector:
     """Detector that locates a query phrase via ASR (DESIGN.md §16.2).
 
-    Depends on a single ``AsrProvider`` — in practice a ``FailoverAsrProvider``
-    composing the cloud-primary and local-fallback providers, so this class
-    knows nothing about cloud vs. local (DESIGN.md §7.3).
+    Composes two interfaces, never a concrete implementation of either: an
+    ``AsrProvider`` — in practice a ``FailoverAsrProvider`` wrapping the
+    cloud-primary and local-fallback providers (DESIGN.md §7.3) — and a
+    ``PhraseMatcher`` — in practice ``CascadeMatcher`` (§8.2). This class
+    knows nothing about cloud vs. local ASR, nor about lexical vs. phonetic
+    vs. semantic matching; it only wires chunk -> transcribe -> merge ->
+    match, plus per-chunk provider diagnostics that ``Candidate.extra`` and
+    ``Candidate.score`` alone can't carry.
     """
 
     name = "asr"
 
-    def __init__(self, provider: AsrProvider, chunk_seconds: float, chunk_overlap_seconds: float):
+    def __init__(
+        self,
+        provider: AsrProvider,
+        matcher: PhraseMatcher,
+        chunk_seconds: float,
+        chunk_overlap_seconds: float,
+    ):
         self._provider = provider
+        self._matcher = matcher
         self._chunk_seconds = chunk_seconds
         self._chunk_overlap_seconds = chunk_overlap_seconds
         # Which provider actually served each chunk of the most recent
         # locate() call, by chunk index — set unconditionally, so this
-        # survives even when the query doesn't match anything (a future
-        # pipeline diagnostics dict can read it regardless of candidates).
+        # survives even when the query doesn't match anything (the pipeline's
+        # diagnostics dict reads it regardless of candidates).
         self.last_chunk_providers: dict[int, str] = {}
 
     def locate(self, media: MediaHandle, query: str, opts: AsrDetectorOptions | None = None) -> list[Candidate]:
         chunks = list(media.iter_audio_chunks(self._chunk_seconds, self._chunk_overlap_seconds))
-        transcripts = []
+        transcripts: list[WordTimedTranscript] = []
         chunk_providers: list[str] = []
         self.last_chunk_providers = {}
         for chunk in chunks:
@@ -62,41 +75,23 @@ class AsrDetector:
             self.last_chunk_providers[chunk.index] = provider
 
         words = merge_transcripts(chunks, transcripts)
-        return _find_candidates(words, query, chunks, chunk_providers)
+        language = next((t.language for t in transcripts if t.language and t.language != "unknown"), "unknown")
+        transcript = WordTimedTranscript(words=words, language=language, provider=self.name)
+
+        candidates = self._matcher.match(transcript, query)
+        return [_attach_provider(c, chunks, chunk_providers) for c in candidates]
 
 
-def _normalize(text: str) -> str:
-    return _PUNCT_RE.sub("", text.lower()).strip()
+def _attach_provider(candidate: Candidate, chunks: Sequence[AudioChunk], chunk_providers: Sequence[str]) -> Candidate:
+    """Tag a matched Candidate with which provider served its start time.
 
-
-def _find_candidates(
-    words: Sequence[Word], query: str, chunks: Sequence[AudioChunk], chunk_providers: Sequence[str]
-) -> list[Candidate]:
-    query_tokens = _normalize(query).split()
-    if not query_tokens:
-        return []
-
-    norm_words = [_normalize(w.text) for w in words]
-    k = len(query_tokens)
-    candidates: list[Candidate] = []
-    for i in range(len(words) - k + 1):
-        if norm_words[i : i + k] != query_tokens:
-            continue
-        span = words[i : i + k]
-        start_time = span[0].start
-        end_time = span[-1].end
-        text = " ".join(w.text.strip() for w in span)
-        provider = _provider_for_time(start_time, chunks, chunk_providers)
-        candidates.append(
-            Candidate(
-                start_time=start_time,
-                end_time=end_time,
-                text=text,
-                score=1.0,
-                extra={"provider": provider},
-            )
-        )
-    return candidates
+    The matcher has no notion of chunks or providers — that's ASR-layer
+    plumbing, not matching — so this stays the detector's job, folded into
+    the same ``extra`` dict the matcher already populated with lexical/
+    phonetic/semantic component scores.
+    """
+    provider = _provider_for_time(candidate.start_time, chunks, chunk_providers)
+    return replace(candidate, extra={**candidate.extra, "provider": provider})
 
 
 def _provider_for_time(t: float, chunks: Sequence[AudioChunk], chunk_providers: Sequence[str]) -> str | None:

@@ -12,13 +12,15 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+from unittest.mock import MagicMock
 
 import pytest
 
+import dfl.media.loader as loader_module
 from dfl.config import MediaConfig
 from dfl.media.errors import ErrorCode, MediaError
-from dfl.media.loader import YtDlpMediaLoader
+from dfl.media.loader import YtDlpMediaLoader, _yt_dlp_download
 from dfl.media.resolver import RemoteMedia
 
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -251,6 +253,98 @@ def test_stubs_raise_not_implemented(clip_with_audio: Path) -> None:
     with loader.load(remote) as handle:
         with pytest.raises(NotImplementedError):
             list(handle.iter_audio_chunks(20.0, 1.0))
+
+
+class _FakeYoutubeDLError(Exception):
+    """Stands in for yt_dlp.utils.YoutubeDLError (the base class the real
+    _yt_dlp_download must catch to retry — mirrors resolver.py's own fake,
+    test_media_resolver.py::_install_fake_yt_dlp)."""
+
+
+class _FakeDownloadError(_FakeYoutubeDLError):
+    """Stands in for yt_dlp.utils.DownloadError (a YoutubeDLError subclass)."""
+
+
+def _install_fake_yt_dlp(
+    monkeypatch: pytest.MonkeyPatch, responses: list[Exception | None], written_name: str = "source.mp4"
+) -> list[dict[str, Any]]:
+    """Monkeypatch loader_module.yt_dlp so each successive YoutubeDL(opts)
+    construction consumes the next entry in `responses`: None means
+    ``.download()`` succeeds (and writes a fake output file into tmpdir, the
+    real download's side effect); an Exception instance means it raises.
+    Returns the `opts` dicts each construction was called with, in order.
+    """
+    remaining = list(responses)
+    calls: list[dict[str, Any]] = []
+
+    def youtube_dl_factory(opts: dict[str, Any]) -> MagicMock:
+        calls.append(opts)
+        response = remaining.pop(0)
+        fake_ydl = MagicMock()
+        fake_ydl.__enter__.return_value = fake_ydl
+        fake_ydl.__exit__.return_value = False
+
+        def _download(urls: list[str]) -> None:
+            if response is not None:
+                raise response
+            tmpdir = os.path.dirname(opts["outtmpl"])
+            Path(tmpdir, written_name).write_bytes(b"fake media bytes")
+
+        fake_ydl.download.side_effect = _download
+        return fake_ydl
+
+    fake_module = MagicMock()
+    fake_module.YoutubeDL.side_effect = youtube_dl_factory
+    fake_module.utils.YoutubeDLError = _FakeYoutubeDLError
+    fake_module.utils.DownloadError = _FakeDownloadError
+
+    monkeypatch.setattr(loader_module, "yt_dlp", fake_module)
+    return calls
+
+
+def test_yt_dlp_download_succeeds_on_first_plain_attempt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = _install_fake_yt_dlp(monkeypatch, responses=[None])
+
+    result = _yt_dlp_download("https://example.com/v", str(tmp_path))
+
+    assert os.path.exists(result)
+    assert len(calls) == 1
+    assert "impersonate" not in calls[0]
+
+
+def test_yt_dlp_download_retries_with_impersonation_when_plain_request_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ok.ru rejects yt-dlp's plain request handler for the real media
+    download too, not just resolver.py's metadata resolution — confirmed by
+    a real manual run against the ok.ru example during Phase 6 development,
+    which failed with exactly this connection-reset error before this retry
+    existed."""
+    calls = _install_fake_yt_dlp(
+        monkeypatch, responses=[_FakeDownloadError("[WinError 10054] connection reset"), None]
+    )
+
+    result = _yt_dlp_download("https://ok.ru/video/248244667877", str(tmp_path))
+
+    assert os.path.exists(result)
+    assert len(calls) == 2
+    assert "impersonate" not in calls[0]
+    assert "impersonate" in calls[1]
+
+
+def test_yt_dlp_download_fails_when_both_attempts_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = _install_fake_yt_dlp(
+        monkeypatch,
+        responses=[
+            _FakeDownloadError("connection reset"),
+            _FakeDownloadError("impersonate target not available"),
+        ],
+    )
+
+    with pytest.raises(MediaError) as excinfo:
+        _yt_dlp_download("https://example.com/v", str(tmp_path))
+    assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
+    assert len(calls) == 2
 
 
 def _dfl_tmpdirs() -> list[str]:

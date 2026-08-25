@@ -28,7 +28,7 @@ import yt_dlp
 from dfl.config import MediaConfig
 from dfl.contracts import Frame, MediaHandle
 from dfl.media.errors import ErrorCode, MediaError
-from dfl.media.resolver import RemoteMedia
+from dfl.media.resolver import RemoteMedia, _chrome_impersonate_target
 
 # (url, tmpdir) -> path to the downloaded file inside tmpdir. Real
 # implementation is _yt_dlp_download; tests inject a fake to avoid network
@@ -231,24 +231,42 @@ class YtDlpMediaLoader:
 
 
 def _yt_dlp_download(url: str, tmpdir: str) -> str:
-    """Real download_fn: resolves + downloads url via yt-dlp (§12.2 — to a
-    temp file, not streaming)."""
+    """Real download_fn: downloads url via yt-dlp (§12.2 — to a temp file, not
+    streaming).
+
+    Some sites (confirmed: ok.ru, via a real manual run during Phase 6) reset
+    the connection on yt-dlp's plain request handler for the actual media
+    download, not only for resolver.py's metadata resolution — so this
+    retries once with Chrome impersonation before giving up, mirroring
+    ``YtDlpMediaResolver.resolve()``'s identical plain-then-impersonate
+    pattern (§12.2).
+    """
     outtmpl = os.path.join(tmpdir, "source.%(ext)s")
-    ydl_opts = {
-        "outtmpl": outtmpl,
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-        "noplaylist": True,
-        "retries": 3,
-        "format": "bv*+ba/b",
-        "merge_output_format": "mp4",
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except yt_dlp.utils.DownloadError as exc:
-        raise MediaError(ErrorCode.DOWNLOAD_FAILED, f"yt-dlp download failed for {url!r}: {exc}") from exc
+    last_error: Exception | None = None
+    for impersonate in (False, True):
+        ydl_opts: dict[str, Any] = {
+            "outtmpl": outtmpl,
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "noplaylist": True,
+            "retries": 3,
+            "format": "bv*+ba/b",
+            "merge_output_format": "mp4",
+        }
+        if impersonate:
+            ydl_opts["impersonate"] = _chrome_impersonate_target()
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            last_error = None
+            break
+        except yt_dlp.utils.YoutubeDLError as exc:
+            last_error = exc
+            continue
+
+    if last_error is not None:
+        raise MediaError(ErrorCode.DOWNLOAD_FAILED, f"yt-dlp download failed for {url!r}: {last_error}") from last_error
 
     candidates = [name for name in os.listdir(tmpdir) if name.startswith("source.")]
     if not candidates:

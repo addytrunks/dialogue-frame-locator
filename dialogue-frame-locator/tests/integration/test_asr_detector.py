@@ -1,10 +1,14 @@
-"""AsrDetector integration tests (DESIGN.md §17.2, §21 Phase 3).
+"""AsrDetector integration tests (DESIGN.md §17.2, §21 Phase 3, §21 Phase 6).
 
 Both the AsrProvider and the MediaHandle are fakes here — the point is to
-prove AsrDetector correctly wires chunking -> provider -> merge -> candidate
-extraction, not to re-test any one of those in isolation (see
-test_asr_chunking.py / test_openrouter_provider.py / test_faster_whisper_provider.py
-for that).
+prove AsrDetector correctly wires chunking -> provider -> merge -> matcher,
+not to re-test any one of those in isolation (see test_asr_chunking.py /
+test_openrouter_provider.py / test_faster_whisper_provider.py / test_matcher.py
+for that). The matcher itself is the real CascadeMatcher: Phase 6 wired
+AsrDetector to delegate matching to it (DESIGN.md §16.2's "PhraseMatcher"
+dependency), replacing Phase 3's placeholder normalized-exact-match-only
+search — an exact match still scores 1.0 either way, so these assertions are
+unchanged, but now genuinely exercise the cascade.
 """
 
 from __future__ import annotations
@@ -15,7 +19,15 @@ import pytest
 
 from dfl.asr.base import Word, WordTimedTranscript
 from dfl.asr.chunking import AudioChunk
+from dfl.config import MatchWeights
 from dfl.detect.asr_detector import AsrDetector
+from dfl.match.matcher import CascadeMatcher
+
+WEIGHTS = MatchWeights(lexical=0.6, phonetic=0.2, semantic=0.2)
+
+
+def _matcher() -> CascadeMatcher:
+    return CascadeMatcher(weights=WEIGHTS)
 
 
 class _FakeMediaHandle:
@@ -66,7 +78,7 @@ def test_locate_returns_candidate_from_golden_single_chunk_transcript() -> None:
         provider="scripted",
     )
     provider = _ScriptedProvider({0: transcript})
-    detector = AsrDetector(provider=provider, chunk_seconds=22.0, chunk_overlap_seconds=1.5)
+    detector = AsrDetector(provider=provider, matcher=_matcher(), chunk_seconds=22.0, chunk_overlap_seconds=1.5)
     media = _FakeMediaHandle([chunk])
 
     candidates = detector.locate(media, "my mind rebels at stagnation")
@@ -75,6 +87,7 @@ def test_locate_returns_candidate_from_golden_single_chunk_transcript() -> None:
     assert candidates[0].text == "my mind rebels at stagnation"
     assert candidates[0].start_time == pytest.approx(1.0)
     assert candidates[0].end_time == pytest.approx(2.3)
+    assert candidates[0].score == pytest.approx(1.0)
     assert candidates[0].extra["provider"] == "scripted"
 
 
@@ -109,7 +122,7 @@ def test_locate_produces_exactly_one_candidate_for_a_chunk_boundary_phrase() -> 
         provider="scripted",
     )
     provider = _ScriptedProvider({0: transcript0, 1: transcript1})
-    detector = AsrDetector(provider=provider, chunk_seconds=5.0, chunk_overlap_seconds=1.5)
+    detector = AsrDetector(provider=provider, matcher=_matcher(), chunk_seconds=5.0, chunk_overlap_seconds=1.5)
     media = _FakeMediaHandle([chunk0, chunk1])
 
     candidates = detector.locate(media, "my mind rebels at stagnation")
@@ -127,7 +140,7 @@ def test_locate_returns_no_candidates_when_query_absent() -> None:
         provider="scripted",
     )
     provider = _ScriptedProvider({0: transcript})
-    detector = AsrDetector(provider=provider, chunk_seconds=22.0, chunk_overlap_seconds=1.5)
+    detector = AsrDetector(provider=provider, matcher=_matcher(), chunk_seconds=22.0, chunk_overlap_seconds=1.5)
     media = _FakeMediaHandle([chunk])
 
     assert detector.locate(media, "my mind rebels at stagnation") == []
@@ -141,10 +154,38 @@ def test_last_chunk_providers_is_recorded_even_with_no_match() -> None:
     chunk1 = AudioChunk(index=1, start_time=3.5, end_time=8.5, wav_bytes=b"")
     empty = WordTimedTranscript(words=[], language="en", provider="scripted")
     provider = _ScriptedProvider({0: empty, 1: empty})
-    detector = AsrDetector(provider=provider, chunk_seconds=5.0, chunk_overlap_seconds=1.5)
+    detector = AsrDetector(provider=provider, matcher=_matcher(), chunk_seconds=5.0, chunk_overlap_seconds=1.5)
     media = _FakeMediaHandle([chunk0, chunk1])
 
     candidates = detector.locate(media, "nothing to find")
 
     assert candidates == []
     assert detector.last_chunk_providers == {0: "scripted", 1: "scripted"}
+
+
+def test_locate_uses_the_real_cascade_not_just_exact_match() -> None:
+    """Phase 6: AsrDetector must delegate to PhraseMatcher (DESIGN.md §16.2),
+    not just Phase 3's placeholder exact-substring search — a near-miss like
+    "against" vs "at" (§8.3) must still surface as a lower-scoring candidate,
+    not vanish."""
+    chunk = AudioChunk(index=0, start_time=0.0, end_time=5.0, wav_bytes=b"")
+    transcript = WordTimedTranscript(
+        words=[
+            Word("my", 1.0, 1.2),
+            Word("mind", 1.2, 1.4),
+            Word("rebels", 1.4, 1.7),
+            Word("against", 1.7, 1.9),
+            Word("stagnation", 1.9, 2.3),
+        ],
+        language="en",
+        provider="scripted",
+    )
+    provider = _ScriptedProvider({0: transcript})
+    detector = AsrDetector(provider=provider, matcher=_matcher(), chunk_seconds=22.0, chunk_overlap_seconds=1.5)
+    media = _FakeMediaHandle([chunk])
+
+    [candidate] = detector.locate(media, "my mind rebels at stagnation")
+
+    assert 0.0 < candidate.score < 1.0
+    assert candidate.text == "my mind rebels against stagnation"
+    assert candidate.extra["provider"] == "scripted"

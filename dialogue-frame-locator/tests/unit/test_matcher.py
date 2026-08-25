@@ -9,6 +9,7 @@ gracefully when the underlying call fails.
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from dfl.asr.base import Word, WordTimedTranscript
 from dfl.config import MatchWeights, SemanticGuardConfig
@@ -232,3 +233,36 @@ def test_empty_query_returns_no_candidates() -> None:
     matcher = CascadeMatcher(weights=WEIGHTS)
 
     assert matcher.match(transcript, "   ") == []
+
+
+def test_avg_word_confidence_is_averaged_over_the_matched_words() -> None:
+    """match.confidence.fuse_confidence reads extra['avg_word_confidence'] to
+    fold in a provider's native per-word confidence (DESIGN.md §10.5) — the
+    matcher is the one place that still has each word's Word.confidence
+    (Candidate itself carries no per-word detail), so it must set this."""
+    transcript = WordTimedTranscript(
+        words=[
+            Word("my", 0.0, 0.2, confidence=0.9),
+            Word("mind", 0.2, 0.4, confidence=0.7),
+            Word("rebels", 0.4, 0.6, confidence=None),  # provider didn't report this one
+        ],
+        language="en",
+        provider="faster_whisper",
+    )
+    matcher = CascadeMatcher(weights=WEIGHTS)
+
+    [candidate] = matcher.match(transcript, "my mind rebels")
+
+    assert candidate.extra["avg_word_confidence"] == pytest.approx((0.9 + 0.7) / 2)
+
+
+def test_avg_word_confidence_absent_when_no_word_reports_it() -> None:
+    """The pinned OpenRouter path never reports per-word confidence (§10.5) —
+    the key must be omitted, not synthesized as 0.0, so confidence.py's
+    presence check (`.get(...) is not None`) correctly skips the signal."""
+    transcript = _transcript("my mind rebels")
+    matcher = CascadeMatcher(weights=WEIGHTS)
+
+    [candidate] = matcher.match(transcript, "my mind rebels")
+
+    assert "avg_word_confidence" not in candidate.extra

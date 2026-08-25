@@ -14,7 +14,11 @@ import pytest
 from dfl.asr.base import FailoverAsrProvider, Word, WordTimedTranscript
 from dfl.asr.chunking import AudioChunk
 from dfl.asr.errors import AsrError, ErrorCode
+from dfl.config import MatchWeights
 from dfl.detect.asr_detector import AsrDetector
+from dfl.match.matcher import CascadeMatcher
+
+_MATCHER_WEIGHTS = MatchWeights(lexical=0.6, phonetic=0.2, semantic=0.2)
 
 
 class _FakeMediaHandle:
@@ -107,7 +111,9 @@ def test_asr_detector_completes_via_failover_and_records_serving_provider() -> N
         [Word("my", 1.0, 1.2), Word("mind", 1.2, 1.4)],
     )
     provider = FailoverAsrProvider(primary, fallback)
-    detector = AsrDetector(provider=provider, chunk_seconds=22.0, chunk_overlap_seconds=1.5)
+    detector = AsrDetector(
+        provider=provider, matcher=CascadeMatcher(weights=_MATCHER_WEIGHTS), chunk_seconds=22.0, chunk_overlap_seconds=1.5
+    )
     media = _FakeMediaHandle([_chunk()])
 
     candidates = detector.locate(media, "my mind")
@@ -120,7 +126,9 @@ def test_asr_detector_raises_asr_unavailable_when_both_providers_fail() -> None:
     primary = _AlwaysFails("openrouter", ErrorCode.ASR_PROVIDER_ERROR)
     fallback = _AlwaysFails("faster_whisper", ErrorCode.ASR_FAILED)
     provider = FailoverAsrProvider(primary, fallback)
-    detector = AsrDetector(provider=provider, chunk_seconds=22.0, chunk_overlap_seconds=1.5)
+    detector = AsrDetector(
+        provider=provider, matcher=CascadeMatcher(weights=_MATCHER_WEIGHTS), chunk_seconds=22.0, chunk_overlap_seconds=1.5
+    )
     media = _FakeMediaHandle([_chunk()])
 
     with pytest.raises(AsrError) as exc_info:
