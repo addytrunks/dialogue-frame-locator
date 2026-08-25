@@ -144,6 +144,47 @@ def test_semantic_guard_failure_degrades_to_lexical_and_phonetic_only() -> None:
     assert with_guard.score == without_guard.score == 1.0
 
 
+def test_semantic_guard_is_only_called_on_a_bounded_shortlist() -> None:
+    # Regression: calling the guard on every sliding window means one
+    # OpenRouter request per word position — tens of thousands per run on a
+    # real transcript. It must only be consulted for the top-scoring
+    # candidates by the cheap lexical+phonetic signals, capped at
+    # max_candidates_to_score, regardless of transcript length.
+    class CountingGuard:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def score(self, query: str, candidate_text: str) -> float | None:
+            self.calls += 1
+            return 0.5
+
+    long_unrelated_transcript = _transcript(" ".join(["filler"] * 200))
+    guard = CountingGuard()
+    matcher = CascadeMatcher(weights=WEIGHTS, semantic_guard=guard, semantic_guard_max_candidates=8)
+
+    matcher.match(long_unrelated_transcript, "my mind rebels at stagnation")
+
+    assert guard.calls <= 8
+
+
+def test_semantic_guard_still_applies_to_the_true_match_when_shortlisted() -> None:
+    # The shortlist cap must not silently disable the guard for the case
+    # that actually matters: an exact/near-exact match sits at the top of
+    # the lexical+phonetic ranking, so it should always be in the shortlist.
+    class AlwaysZeroGuard:
+        def score(self, query: str, candidate_text: str) -> float | None:
+            return 0.0
+
+    transcript = _transcript(" ".join(["filler"] * 50) + " my mind rebels at stagnation " + " ".join(["filler"] * 50))
+    matcher = CascadeMatcher(weights=WEIGHTS, semantic_guard=AlwaysZeroGuard(), semantic_guard_max_candidates=8)
+
+    candidates = matcher.match(transcript, "my mind rebels at stagnation")
+
+    exact = [c for c in candidates if c.text == "my mind rebels at stagnation"]
+    assert len(exact) == 1
+    assert "semantic" in exact[0].extra
+
+
 def test_openrouter_semantic_guard_timeout_still_completes_the_match() -> None:
     """Integration: a real OpenRouterSemanticGuard whose HTTP call times out
     must not stop CascadeMatcher from producing a lexical/phonetic-only
@@ -159,6 +200,7 @@ def test_openrouter_semantic_guard_timeout_still_completes_the_match() -> None:
             model="openai/text-embedding-3-small",
             api_key_env="OPENROUTER_API_KEY",
             timeout_seconds=15.0,
+            max_candidates_to_score=8,
         ),
         api_key="sk-test",
         client=httpx.Client(transport=httpx.MockTransport(handler)),

@@ -40,6 +40,12 @@ match:
     model: openai/text-embedding-3-small    # embedding model; scored via cosine similarity, not a chat call
     api_key_env: OPENROUTER_API_KEY
     timeout_seconds: 15.0
+    # The matcher scores every sliding window with the cheap lexical+phonetic
+    # signals first, then calls the semantic guard only on the top-scoring
+    # windows by that partial score — never on all of them. Without this cap,
+    # a long transcript means one OpenRouter call per word position (tens of
+    # thousands per run), not "an occasional tie-breaker."
+    max_candidates_to_score: 8
   confidence:
     # Signal fusion weights for the proxy confidence (DESIGN.md §10.2/§10.5).
     # provider_confidence only enters the mix when the transcript carries

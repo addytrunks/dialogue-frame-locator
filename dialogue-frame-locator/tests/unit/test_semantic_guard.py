@@ -25,6 +25,7 @@ CONFIG = SemanticGuardConfig(
     model="openai/text-embedding-3-small",
     api_key_env="OPENROUTER_API_KEY",
     timeout_seconds=15.0,
+    max_candidates_to_score=8,
 )
 
 

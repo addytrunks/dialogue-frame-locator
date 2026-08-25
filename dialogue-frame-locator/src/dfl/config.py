@@ -73,6 +73,7 @@ class SemanticGuardConfig:
     model: str
     api_key_env: str
     timeout_seconds: float
+    max_candidates_to_score: int
 
 
 @dataclass(frozen=True)
@@ -228,9 +229,14 @@ def _parse(raw: Any) -> Config:
         model=_require_type(guard_raw, "model", "match.semantic_guard", str),
         api_key_env=_require_type(guard_raw, "api_key_env", "match.semantic_guard", str),
         timeout_seconds=float(_require_type(guard_raw, "timeout_seconds", "match.semantic_guard", (int, float))),
+        max_candidates_to_score=int(
+            _require_type(guard_raw, "max_candidates_to_score", "match.semantic_guard", int)
+        ),
     )
     if semantic_guard.timeout_seconds <= 0:
         raise ConfigError("match.semantic_guard.timeout_seconds must be > 0")
+    if semantic_guard.max_candidates_to_score <= 0:
+        raise ConfigError("match.semantic_guard.max_candidates_to_score must be > 0")
 
     confidence_raw = _require_type(match_raw, "confidence", "match", dict)
     confidence_weights_raw = _require_type(confidence_raw, "weights", "match.confidence", dict)

@@ -35,6 +35,15 @@ def test_leaves_existing_digits_alone() -> None:
     assert normalize_text("room 42") == "room 42"
 
 
+def test_does_not_corrupt_possessives_that_contain_a_shorter_contraction() -> None:
+    # Regression: "it's" is a substring of "spirit's"/"unit's"/"wit's" — the
+    # contraction match must be word-boundary-anchored, not a bare substring
+    # search, or these possessives get mangled into nonsense.
+    assert normalize_text("the unit's failure") == "the unit s failure"
+    assert normalize_text("wit's end") == "wit s end"
+    assert normalize_text("the spirit's will") == "the spirit s will"
+
+
 def test_at_vs_against_survive_as_distinct_tokens() -> None:
     # Normalization must not silently conflate near-miss function words —
     # that distinction is the matcher's job (DESIGN.md §8.3), not normalize's.

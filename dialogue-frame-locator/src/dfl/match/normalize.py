@@ -108,10 +108,12 @@ _DIGIT_WORDS: dict[str, str] = {
     "thousand": "1000",
 }
 
-# Matches a contraction as a whole word (word boundary on both sides), so
-# "it's" inside a longer token isn't accidentally matched mid-word.
+# Matches a contraction as a whole word (\b on both sides), so "it's"
+# doesn't get pulled out of "spirit's"/"unit's"/"wit's" — apostrophe is a
+# non-word character to \w, so an unanchored search matches it as a bare
+# substring wherever it appears, corrupting unrelated possessives.
 _CONTRACTION_RE = re.compile(
-    "|".join(re.escape(k) for k in sorted(_CONTRACTIONS, key=len, reverse=True))
+    r"\b(?:" + "|".join(re.escape(k) for k in sorted(_CONTRACTIONS, key=len, reverse=True)) + r")\b"
 )
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WHITESPACE_RE = re.compile(r"\s+")

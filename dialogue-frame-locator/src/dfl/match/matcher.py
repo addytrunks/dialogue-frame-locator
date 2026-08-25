@@ -14,11 +14,17 @@ CascadeMatcher implements the §8.2 cascade over a word-timed transcript:
    tie-breaker/booster (never primary — §8.2).
 4. Semantic guard — optional, injected via the ``semantic_guard`` param
    (typically match.semantic_guard.py's OpenRouterSemanticGuard, an
-   embedding-cosine-similarity score). Weighted
-   at its configured share and no more, so it can never singlehandedly push
-   a score past a reasonable accept threshold (§8.2's "flag, not sufficient
-   alone"), and skipped (weight redistributed to lexical+phonetic) whenever
-   it's absent, disabled, or returns None (degrade gracefully).
+   embedding-cosine-similarity score). Weighted at its configured share and
+   no more, so it can never singlehandedly push a score past a reasonable
+   accept threshold (§8.2's "flag, not sufficient alone"), and skipped
+   (weight redistributed to lexical+phonetic) whenever it's absent,
+   disabled, or returns None (degrade gracefully).
+
+   Called on at most ``semantic_guard_max_candidates`` windows per
+   ``match()`` call — the ones ranked highest by the cheap lexical+phonetic
+   score alone — never on every sliding-window position. A transcript has
+   one window per word; calling out to OpenRouter for each would mean one
+   request per word of audio, not an occasional tie-breaker.
 """
 
 from __future__ import annotations
@@ -71,9 +77,15 @@ class _Token:
 class CascadeMatcher:
     """Concrete PhraseMatcher implementing the §8.2 cascade."""
 
-    def __init__(self, weights: MatchWeights, semantic_guard: SemanticScorer | None = None):
+    def __init__(
+        self,
+        weights: MatchWeights,
+        semantic_guard: SemanticScorer | None = None,
+        semantic_guard_max_candidates: int = 8,
+    ):
         self._weights = weights
         self._semantic_guard = semantic_guard
+        self._semantic_guard_max_candidates = semantic_guard_max_candidates
 
     def match(self, transcript: WordTimedTranscript, query: str) -> list[Candidate]:
         query_tokens = normalize_text(query).split()
@@ -85,16 +97,20 @@ class CascadeMatcher:
         if len(tokens) < k:
             return []
 
-        raw: list[Candidate] = []
-        for i in range(len(tokens) - k + 1):
-            window = tokens[i : i + k]
-            candidate = self._score_window(query_tokens, window)
-            if candidate.score >= _NOISE_FLOOR:
-                raw.append(candidate)
+        windows = [tokens[i : i + k] for i in range(len(tokens) - k + 1)]
+        scored = [self._score_window(query_tokens, window) for window in windows]
 
+        if self._semantic_guard is not None:
+            shortlist = sorted(range(len(scored)), key=lambda i: scored[i][0], reverse=True)
+            shortlist = shortlist[: self._semantic_guard_max_candidates]
+            for i in shortlist:
+                scored[i] = self._apply_semantic_guard(query_tokens, windows[i], scored[i])
+
+        raw = [candidate for _, candidate in scored if candidate.score >= _NOISE_FLOOR]
         return _suppress_overlapping(raw)
 
-    def _score_window(self, query_tokens: list[str], window: list[_Token]) -> Candidate:
+    def _score_window(self, query_tokens: list[str], window: list[_Token]) -> tuple[float, Candidate]:
+        """Lexical+phonetic score only — the semantic guard is applied separately, on a shortlist."""
         window_tokens = [t.text for t in window]
 
         lexical = _lexical_score(query_tokens, window_tokens)
@@ -102,30 +118,46 @@ class CascadeMatcher:
 
         weight_total = self._weights.lexical + self._weights.phonetic
         weighted = self._weights.lexical * lexical + self._weights.phonetic * phonetic
-
-        semantic: float | None = None
-        candidate_text = " ".join(w.word.text.strip() for w in window)
-        if self._semantic_guard is not None:
-            semantic = self._semantic_guard.score(" ".join(query_tokens), candidate_text)
-            if semantic is not None:
-                weight_total += self._weights.semantic
-                weighted += self._weights.semantic * semantic
-
         score = weighted / weight_total if weight_total > 0 else 0.0
 
-        start_time = window[0].word.start
-        end_time = window[-1].word.end
-        extra = {"lexical": lexical, "phonetic": phonetic}
-        if semantic is not None:
-            extra["semantic"] = semantic
-
-        return Candidate(
-            start_time=start_time,
-            end_time=end_time,
+        candidate_text = " ".join(w.word.text.strip() for w in window)
+        candidate = Candidate(
+            start_time=window[0].word.start,
+            end_time=window[-1].word.end,
             text=candidate_text,
             score=score,
-            extra=extra,
+            extra={"lexical": lexical, "phonetic": phonetic},
         )
+        return score, candidate
+
+    def _apply_semantic_guard(
+        self, query_tokens: list[str], window: list[_Token], scored: tuple[float, Candidate]
+    ) -> tuple[float, Candidate]:
+        _, candidate = scored
+        assert self._semantic_guard is not None
+
+        semantic = self._semantic_guard.score(" ".join(query_tokens), candidate.text)
+        if semantic is None:
+            return scored
+
+        lexical = candidate.extra["lexical"]
+        phonetic = candidate.extra["phonetic"]
+        weight_total = self._weights.lexical + self._weights.phonetic + self._weights.semantic
+        weighted = (
+            self._weights.lexical * lexical
+            + self._weights.phonetic * phonetic
+            + self._weights.semantic * semantic
+        )
+        score = weighted / weight_total if weight_total > 0 else 0.0
+
+        blended = Candidate(
+            start_time=candidate.start_time,
+            end_time=candidate.end_time,
+            text=candidate.text,
+            score=score,
+            extra={**candidate.extra, "semantic": semantic},
+        )
+        return score, blended
 
 
 def _flatten(words: list[Word]) -> list[_Token]:
