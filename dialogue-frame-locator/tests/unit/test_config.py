@@ -40,7 +40,7 @@ def test_missing_required_key_raises_config_error(tmp_path: Path) -> None:
 
 
 def test_invalid_threshold_range_raises_config_error(tmp_path: Path) -> None:
-    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace("tau_accept: 0.75", "tau_accept: 1.5")
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace("tau_accept: 0.80", "tau_accept: 1.5")
     bad = tmp_path / "bad_threshold.yaml"
     bad.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError):

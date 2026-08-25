@@ -149,3 +149,35 @@ A few questions:
 1. Why is there a overlap of chunks?
 2.Regarding the missing segments in the response, you've missed adding segment to timestamp_granularities, check out @..\test.py for the syntax.
 3. Am i good to proceed to phase 4? Are there anything missing? any bugs?
+
+---
+
+## Phase 4 — Phrase Matching & Confidence
+
+You're implementing Phase 4 (phrase matching + confidence/status). Read DESIGN.md §8 and §10 in full, then read the current repo — contracts.py's Status enum, asr output shape from Phase 3, and asr/openrouter_provider.py's pinned-provider pattern — before writing anything.
+
+NOTE ON DEVIATION FROM DESIGN.md: DESIGN.md §8.2/A11 specifies Ollama for the optional semantic-guard signal. That's been revised — the semantic guard now runs on OpenRouter (a lightweight chat or embedding call), reusing the same pinned-provider pattern already built for ASR in Phase 3, instead of standing up a second, local-only LLM integration path. Build to this revision, not to the Ollama version in the design doc. I'll cover the "why" in my own DECISIONS.md entry — you don't need to justify it in code, just implement it correctly.
+
+STANDING RULES:
+- Scope for THIS phase only: normalize → match → score → fuse into confidence → decide status. No temporal refinement (forced alignment), no frame logic, no pipeline wiring yet.
+- No OCR, no job queue, no HTTP API.
+- The semantic-guard layer is optional infrastructure by design (§8.2: it's a tie-breaker/flag, never sufficient alone) — it must degrade gracefully, skip it rather than crash, if the OpenRouter call errors, times out, or is rate-limited. Mock the OpenRouter call in automated tests; also handle the "call failed" case as a real, tested code path, not just a try/except you hope works.
+- OPENROUTER_API_KEY comes from environment/.env only, same as Phase 3 — don't introduce a second way of reading it.
+- Do not write or edit DECISIONS.md.
+- Before writing code, append this entire prompt verbatim to PROMPTS.md under "## Phase 4 — Phrase Matching & Confidence".
+- When done, summarize and STOP — don't start Phase 5.
+- Commit only this phase's work: "Phase 4: phrase matching and confidence/status".
+
+BUILD:
+- match/normalize.py: lowercase, punctuation normalization, contraction expansion, whitespace collapse, digit normalization (§8.1) — unit-tested and documented since behavior must be explainable.
+- match/matcher.py: the cascade from §8.2 — normalized exact/substring, fuzzy token similarity (sliding window, edit distance / token-set ratio), phonetic similarity as a tie-breaker (not primary key), and the OpenRouter-backed semantic guard as a flag-only signal (never sufficient alone).
+- match/semantic_guard.py: the OpenRouter-backed layer, isolated so it's cleanly mockable/disablable, reusing the pinned-provider request pattern from asr/openrouter_provider.py rather than inventing a new HTTP client.
+- match/confidence.py: signal fusion (§10.2) into confidence ∈ [0,1], plus the decision policy from §10.3 (best/τ_reject/δ/τ_accept/τ_c logic) mapping to FOUND/AMBIGUOUS/NOT_FOUND. Implement the §10.5 proxy confidence for cloud-sourced transcripts (match-quality + VAD-agreement placeholder + local-provider-native-confidence-when-available) since per-word confidence isn't confirmed available from OpenRouter.
+- Weights and thresholds come from config/default.yaml (Phase 0), not hardcoded. Use the provider-agnostic `match.semantic_guard.provider`/`.model` keys.
+
+VALIDATION (§17.1, §21 Phase 4):
+- The "at" vs "against" discriminator from §8.3 as an explicit test: assert it lands in the near-match/AMBIGUOUS band, not silently accepted as exact.
+- Multiple comparable matches → AMBIGUOUS with all candidates listed.
+- No match above τ_reject → NOT_FOUND.
+- Table-driven tests over the §10.3 decision policy covering every branch.
+- A test that mocks the OpenRouter semantic-guard call failing (timeout/5xx) and confirms matching still completes without the semantic layer, using only the lexical/phonetic signals.

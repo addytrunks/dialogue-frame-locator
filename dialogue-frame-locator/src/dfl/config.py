@@ -62,8 +62,30 @@ class MatchWeights:
 
 @dataclass(frozen=True)
 class SemanticGuardConfig:
+    """Phase 4 revision: OpenRouter-backed, not Ollama (DECISIONS.md).
+
+    ``provider``/``model`` are deliberately provider-agnostic keys (not
+    ``ollama_model``) so a future provider swap doesn't rename config.
+    """
+
     enabled: bool
-    ollama_model: str
+    provider: str
+    model: str
+    api_key_env: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True)
+class ConfidenceWeights:
+    match_score: float
+    vad_agreement: float
+    provider_confidence: float
+
+
+@dataclass(frozen=True)
+class ConfidenceConfig:
+    weights: ConfidenceWeights
+    vad_agreement_placeholder: float
 
 
 @dataclass(frozen=True)
@@ -71,6 +93,7 @@ class MatchConfig:
     thresholds: MatchThresholds
     weights: MatchWeights
     semantic_guard: SemanticGuardConfig
+    confidence: ConfidenceConfig
 
 
 @dataclass(frozen=True)
@@ -201,10 +224,33 @@ def _parse(raw: Any) -> Config:
 
     semantic_guard = SemanticGuardConfig(
         enabled=_require_type(guard_raw, "enabled", "match.semantic_guard", bool),
-        ollama_model=_require_type(guard_raw, "ollama_model", "match.semantic_guard", str),
+        provider=_require_type(guard_raw, "provider", "match.semantic_guard", str),
+        model=_require_type(guard_raw, "model", "match.semantic_guard", str),
+        api_key_env=_require_type(guard_raw, "api_key_env", "match.semantic_guard", str),
+        timeout_seconds=float(_require_type(guard_raw, "timeout_seconds", "match.semantic_guard", (int, float))),
     )
+    if semantic_guard.timeout_seconds <= 0:
+        raise ConfigError("match.semantic_guard.timeout_seconds must be > 0")
 
-    match = MatchConfig(thresholds=thresholds, weights=weights, semantic_guard=semantic_guard)
+    confidence_raw = _require_type(match_raw, "confidence", "match", dict)
+    confidence_weights_raw = _require_type(confidence_raw, "weights", "match.confidence", dict)
+    confidence_weights = ConfidenceWeights(
+        match_score=float(_require_type(confidence_weights_raw, "match_score", "match.confidence.weights", (int, float))),
+        vad_agreement=float(_require_type(confidence_weights_raw, "vad_agreement", "match.confidence.weights", (int, float))),
+        provider_confidence=float(
+            _require_type(confidence_weights_raw, "provider_confidence", "match.confidence.weights", (int, float))
+        ),
+    )
+    confidence = ConfidenceConfig(
+        weights=confidence_weights,
+        vad_agreement_placeholder=float(
+            _require_type(confidence_raw, "vad_agreement_placeholder", "match.confidence", (int, float))
+        ),
+    )
+    if not 0.0 <= confidence.vad_agreement_placeholder <= 1.0:
+        raise ConfigError("match.confidence.vad_agreement_placeholder must be in [0, 1]")
+
+    match = MatchConfig(thresholds=thresholds, weights=weights, semantic_guard=semantic_guard, confidence=confidence)
 
     media_raw = _require_type(raw, "media", "", dict)
     media = MediaConfig(

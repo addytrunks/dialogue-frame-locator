@@ -37,7 +37,6 @@ candidate input for Phase 4's confidence fusion (§10.5), not consumed here.
 from __future__ import annotations
 
 import base64
-import os
 from typing import Any
 
 import httpx
@@ -46,6 +45,7 @@ from dfl.asr.base import Word, WordTimedTranscript
 from dfl.asr.chunking import AudioChunk
 from dfl.asr.errors import AsrError, ErrorCode
 from dfl.config import OpenRouterAsrConfig
+from dfl.secrets import read_env_key
 
 _ENDPOINT = "https://openrouter.ai/api/v1/audio/transcriptions"
 _MAX_ERROR_BODY_CHARS = 500
@@ -55,14 +55,11 @@ def load_api_key(config: OpenRouterAsrConfig) -> str:
     """Read the API key from the environment, loading .env first if present.
 
     DESIGN.md §7.5: OPENROUTER_API_KEY comes from environment/.env only —
-    never hardcoded, never committed. ``load_dotenv`` only fills in variables
-    not already set in the process environment, so an explicit env var always
-    wins over a .env file.
+    never hardcoded, never committed. Shares dfl.secrets.read_env_key with
+    match/semantic_guard.py so there is exactly one mechanism for this,
+    not one per OpenRouter-backed caller.
     """
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    key = os.environ.get(config.api_key_env)
+    key = read_env_key(config.api_key_env)
     if not key:
         raise AsrError(
             ErrorCode.ASR_FAILED,

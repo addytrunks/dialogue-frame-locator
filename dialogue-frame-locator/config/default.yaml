@@ -21,7 +21,12 @@ language:
 
 match:
   thresholds:
-    tau_accept: 0.75
+    # tau_accept calibrated against the "at" vs "against" discriminator
+    # (DESIGN.md §8.3): CascadeMatcher's lexical*phonetic formula scores that
+    # single-content-word substitution at ~0.75 with the default weights, so
+    # tau_accept sits at 0.80 to keep a clear margin — that case must land
+    # as a near-match/AMBIGUOUS, never silently accepted as exact.
+    tau_accept: 0.80
     tau_reject: 0.40
     delta: 0.05                # AMBIGUOUS band: other candidate within best * (1 - delta)
     tau_c: 0.60                # minimum fused confidence required for FOUND
@@ -31,7 +36,21 @@ match:
     semantic: 0.2
   semantic_guard:
     enabled: false
-    ollama_model: nomic-embed-text
+    provider: openrouter        # provider-agnostic key (Phase 4 revision: OpenRouter, not Ollama — see DECISIONS.md)
+    model: openai/gpt-4o-mini   # cheap chat model used for a bounded 0-1 similarity score
+    api_key_env: OPENROUTER_API_KEY
+    timeout_seconds: 15.0
+  confidence:
+    # Signal fusion weights for the proxy confidence (DESIGN.md §10.2/§10.5).
+    # provider_confidence only enters the mix when the transcript carries
+    # native per-word confidence (e.g. the local faster-whisper fallback);
+    # when absent (the pinned OpenRouter path), weight is redistributed
+    # across the remaining signals.
+    weights:
+      match_score: 0.7
+      vad_agreement: 0.1
+      provider_confidence: 0.2
+    vad_agreement_placeholder: 1.0  # Phase 5 replaces this with a real VAD check; neutral until then
 
 media:
   max_size_mb: 2048
