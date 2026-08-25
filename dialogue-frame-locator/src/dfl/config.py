@@ -98,6 +98,43 @@ class MatchConfig:
 
 
 @dataclass(frozen=True)
+class VadConfig:
+    """Silero-VAD parameters + how far the onset may sit from a speech region (DESIGN.md §6.4 step 3)."""
+
+    threshold: float
+    min_speech_duration_ms: int
+    min_silence_duration_ms: int
+    speech_pad_ms: int
+    tolerance_seconds: float
+    window_pad_seconds: float
+
+
+@dataclass(frozen=True)
+class SnapConfig:
+    """Snapping the onset to a speech-region start (DESIGN.md §6.3, VAD's second role)."""
+
+    enabled: bool
+    max_delta_seconds: float
+
+
+@dataclass(frozen=True)
+class AlignmentConfig:
+    """When to spend a forced alignment, and over what window (DESIGN.md §6.4 step 4)."""
+
+    enabled: bool
+    trigger_score: float
+    trigger_word_confidence: float
+    window_pad_seconds: float
+
+
+@dataclass(frozen=True)
+class RefineConfig:
+    vad: VadConfig
+    snap: SnapConfig
+    alignment: AlignmentConfig
+
+
+@dataclass(frozen=True)
 class MediaConfig:
     max_size_mb: float
     max_duration_seconds: float
@@ -119,6 +156,7 @@ class Config:
     asr: AsrConfig
     language: LanguageConfig
     match: MatchConfig
+    refine: RefineConfig
     media: MediaConfig
     output: OutputConfig
     detector: DetectorConfig
@@ -258,6 +296,59 @@ def _parse(raw: Any) -> Config:
 
     match = MatchConfig(thresholds=thresholds, weights=weights, semantic_guard=semantic_guard, confidence=confidence)
 
+    refine_raw = _require_type(raw, "refine", "", dict)
+    vad_raw = _require_type(refine_raw, "vad", "refine", dict)
+    snap_raw = _require_type(refine_raw, "snap", "refine", dict)
+    alignment_raw = _require_type(refine_raw, "alignment", "refine", dict)
+
+    vad = VadConfig(
+        threshold=float(_require_type(vad_raw, "threshold", "refine.vad", (int, float))),
+        min_speech_duration_ms=int(_require_type(vad_raw, "min_speech_duration_ms", "refine.vad", int)),
+        min_silence_duration_ms=int(_require_type(vad_raw, "min_silence_duration_ms", "refine.vad", int)),
+        speech_pad_ms=int(_require_type(vad_raw, "speech_pad_ms", "refine.vad", int)),
+        tolerance_seconds=float(_require_type(vad_raw, "tolerance_seconds", "refine.vad", (int, float))),
+        window_pad_seconds=float(_require_type(vad_raw, "window_pad_seconds", "refine.vad", (int, float))),
+    )
+    if not 0.0 <= vad.threshold <= 1.0:
+        raise ConfigError(f"refine.vad.threshold must be in [0, 1], got {vad.threshold}")
+    for name, value in (
+        ("min_speech_duration_ms", vad.min_speech_duration_ms),
+        ("min_silence_duration_ms", vad.min_silence_duration_ms),
+        ("speech_pad_ms", vad.speech_pad_ms),
+        ("tolerance_seconds", vad.tolerance_seconds),
+        ("window_pad_seconds", vad.window_pad_seconds),
+    ):
+        if value < 0:
+            raise ConfigError(f"refine.vad.{name} must be >= 0, got {value}")
+
+    snap = SnapConfig(
+        enabled=_require_type(snap_raw, "enabled", "refine.snap", bool),
+        max_delta_seconds=float(_require_type(snap_raw, "max_delta_seconds", "refine.snap", (int, float))),
+    )
+    if snap.max_delta_seconds < 0:
+        raise ConfigError(f"refine.snap.max_delta_seconds must be >= 0, got {snap.max_delta_seconds}")
+
+    alignment = AlignmentConfig(
+        enabled=_require_type(alignment_raw, "enabled", "refine.alignment", bool),
+        trigger_score=float(_require_type(alignment_raw, "trigger_score", "refine.alignment", (int, float))),
+        trigger_word_confidence=float(
+            _require_type(alignment_raw, "trigger_word_confidence", "refine.alignment", (int, float))
+        ),
+        window_pad_seconds=float(
+            _require_type(alignment_raw, "window_pad_seconds", "refine.alignment", (int, float))
+        ),
+    )
+    for name, value in (
+        ("trigger_score", alignment.trigger_score),
+        ("trigger_word_confidence", alignment.trigger_word_confidence),
+    ):
+        if not 0.0 <= value <= 1.0:
+            raise ConfigError(f"refine.alignment.{name} must be in [0, 1], got {value}")
+    if alignment.window_pad_seconds < 0:
+        raise ConfigError("refine.alignment.window_pad_seconds must be >= 0")
+
+    refine = RefineConfig(vad=vad, snap=snap, alignment=alignment)
+
     media_raw = _require_type(raw, "media", "", dict)
     media = MediaConfig(
         max_size_mb=float(_require_type(media_raw, "max_size_mb", "media", (int, float))),
@@ -279,6 +370,7 @@ def _parse(raw: Any) -> Config:
         asr=asr,
         language=language,
         match=match,
+        refine=refine,
         media=media,
         output=output,
         detector=detector,

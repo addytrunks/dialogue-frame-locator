@@ -191,3 +191,24 @@ semantic_guard:
 
 is this good? Looks like it's using the 4o-mini to compute the similarity. I think using an embedding model, computing the similarity between the two vectos would make more sense?
 I dont understand one thing, is the embedding being applied word by word, or to the entire sentence in that window (k)?
+## Phase 5 — Temporal Refinement
+
+You're implementing Phase 5 (temporal refinement — sharpening onset). Read DESIGN.md §6 in full, then read the current repo (asr word-timestamp output from Phase 3, matcher candidate output from Phase 4) before writing anything.
+
+STANDING RULES:
+- Scope for THIS phase only: given a matched candidate, produce t* = onset of the first matched word, VAD-checked, optionally forced-aligned when confidence is low (§6.4). No pipeline wiring, no CLI.
+- No OCR, no job queue, no HTTP API.
+- Mock/synthesize all audio for tests — no dependency on the real ok.ru file this phase.
+- Do not write or edit DECISIONS.md.
+- Before writing code, append this entire prompt verbatim to PROMPTS.md under "## Phase 5 — Temporal Refinement".
+- When done, summarize and STOP — don't start Phase 6.
+- Commit only this phase's work: "Phase 5: temporal refinement (VAD + optional forced alignment)".
+
+BUILD:
+- localize/refine.py implementing §6.4's steps: take the matcher's word-span onset t0; VAD-check that t0 sits inside a speech region (reject/distrust if not — hallucination guard); if word-timestamp confidence is low or the match was fuzzy, run forced alignment of the query against a small window [t0-1s, t_end+1s] to sharpen to t*; otherwise t* = t0.
+- Pick and pin a specific VAD library and, if you implement forced alignment, a specific alignment approach — document the choice and why in your phase summary (this is exactly the kind of decision I need to defend live, so give me the real trade-off, not just "I picked X").
+
+VALIDATION (§17.1, §21 Phase 5):
+- Synthetic audio with a TTS-inserted phrase at a KNOWN exact timestamp → onset error within ±100ms.
+- A silence/non-speech region gets correctly rejected by the VAD check (hallucination guard test).
+- A low-confidence match triggers the forced-alignment path; a high-confidence match does not (assert the branch taken, not just the output).

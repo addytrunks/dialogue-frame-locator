@@ -53,3 +53,20 @@ def test_unknown_asr_provider_raises_config_error(tmp_path: Path) -> None:
     bad.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(bad)
+
+
+def test_refine_section_is_loaded(tmp_path: Path) -> None:
+    config = load_config(DEFAULT_CONFIG)
+    assert config.refine.vad.speech_pad_ms == 0
+    assert config.refine.alignment.window_pad_seconds == 1.0  # DESIGN.md §6.4: [t0-1s, t_end+1s]
+    assert config.refine.snap.enabled is True
+
+
+def test_negative_snap_delta_raises_config_error(tmp_path: Path) -> None:
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace(
+        "max_delta_seconds: 0.25", "max_delta_seconds: -1.0"
+    )
+    bad = tmp_path / "bad_snap.yaml"
+    bad.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(bad)

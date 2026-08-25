@@ -5,10 +5,10 @@ that line is spoken — timestamp, frame number, matched text, confidence,
 and the rendered frame image. See `DESIGN.md` for the full architecture,
 rationale, and trade-offs, and `PROMPTS.md` for all LLM prompts used.
 
-**Status:** media ingestion (Phase 1), exact frame extraction (Phase 2), and
-ASR providers (Phase 3) are implemented. Phrase matching, temporal
-refinement, and pipeline wiring are not — see `DESIGN.md` §21 for the
-phased roadmap.
+**Status:** media ingestion (Phase 1), exact frame extraction (Phase 2), ASR
+providers (Phase 3), phrase matching and confidence (Phase 4), and temporal
+refinement (Phase 5) are implemented. Pipeline wiring and the CLI are not —
+see `DESIGN.md` §21 for the phased roadmap.
 
 ## ASR: cloud-primary, local fallback
 
@@ -40,6 +40,38 @@ hard constraint, not a long-video optimization (`DESIGN.md` §7.5, A10).
   for this phase. It uses a minimal normalized exact/substring match to turn
   the merged word stream into `Candidate`s; the fuzzy/phonetic/semantic
   matching cascade is Phase 4's `match/matcher.py`, not this module.
+
+## Temporal refinement: from a word span to `t*`
+
+`dfl.localize.refine` turns the matched span's start time `t0` into the onset
+`t*` that gets converted to a frame (`DESIGN.md` §6.4). Two signals, each
+bounding the other:
+
+- **VAD check (`dfl.localize.vad.SileroVad`)** — Silero VAD v6, run through
+  the ONNX copy that ships inside the already-pinned `faster-whisper` wheel:
+  a modern neural VAD for zero new dependencies and no download. If `t0`
+  isn't inside a speech region the candidate is flagged (`vad_ok=False`,
+  `vad_agreement=0.0`, which `match.confidence` fuses into the reported
+  confidence) and nothing is sharpened — that is the ASR-hallucination guard.
+  If `t0` sits just *after* a speech-region start, it snaps back onto that
+  boundary, bounded by `refine.snap.max_delta_seconds` so a phrase that
+  genuinely begins mid-utterance is never dragged to the sentence start.
+- **Conditional forced alignment (`dfl.localize.alignment`)** — only when the
+  match was fuzzy or its timings were low-confidence, the query is aligned
+  against `[t0-1s, t_end+1s]` using Whisper's own cross-attention DTW
+  (`find_alignment`), i.e. the same mechanism that produces word timestamps,
+  pointed at known text. Best-effort by design: any failure degrades to `t0`.
+  Its result is held inside the VAD's speech region, because Whisper's DTW
+  stretches the first aligned word back toward the window edge.
+
+`RefinedOnset` reports which branch ran (`word_timestamp` / `vad_snap` /
+`forced_alignment`), so the number is auditable rather than merely precise.
+`t*` is on the **audio** timeline; §9 converts it to a presentation frame.
+
+Both collaborators are one-method Protocols, so a different VAD or a
+purpose-built aligner (torchaudio MMS, MFA) drops in without touching the
+policy — the trade-offs behind picking these two are documented at the top of
+`localize/vad.py` and `localize/alignment.py`.
 
 ## Frame extraction: the timestamp → frame convention
 

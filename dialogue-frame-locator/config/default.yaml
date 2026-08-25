@@ -58,6 +58,37 @@ match:
       provider_confidence: 0.2
     vad_agreement_placeholder: 1.0  # Phase 5 replaces this with a real VAD check; neutral until then
 
+# Temporal refinement (DESIGN.md §6.3/§6.4) — turning the matched word span's
+# onset t0 into t*. Phase 5.
+refine:
+  vad:
+    # Silero VAD v6, run through faster-whisper's bundled ONNX copy (no extra
+    # dependency, no download). Defaults tuned for onset precision, not for
+    # utterance segmentation:
+    threshold: 0.5                 # Silero's own recommended default
+    min_speech_duration_ms: 100    # drop blips that would fake a speech region
+    min_silence_duration_ms: 200   # faster-whisper's 2000ms default glues whole
+                                   # dialogue exchanges into one region, which
+                                   # destroys the boundary we want to snap to
+    speech_pad_ms: 0               # its 400ms default moves every region start
+                                   # 400ms earlier — fatal for an onset estimate
+    tolerance_seconds: 0.20        # word timestamps are ±0.1-0.3s (§6.2), so an
+                                   # onset this close to a region still counts as
+                                   # "in speech", just at half trust
+    window_pad_seconds: 2.0        # VAD is run over [t0-2s, t_end+2s] only
+  snap:
+    # §6.3's second VAD role: pull a slightly-late word timestamp back onto the
+    # speech-region start. Bounded, because a matched phrase may legitimately
+    # begin mid-utterance and must never be dragged to the sentence start.
+    enabled: true
+    max_delta_seconds: 0.25
+  alignment:
+    enabled: true
+    trigger_score: 0.80            # == match.thresholds.tau_accept: anything not
+                                   # cleanly accepted is worth realigning
+    trigger_word_confidence: 0.60  # native per-word confidence, when the provider reports it
+    window_pad_seconds: 1.0        # §6.4 step 4: align over [t0-1s, t_end+1s]
+
 media:
   max_size_mb: 2048
   max_duration_seconds: 14400
