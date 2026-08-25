@@ -12,17 +12,26 @@ verbose_json, timestamp_granularities=["word"], against an 18s WAV):
     }
 
 This confirms DESIGN.md A9/§7.5's core claim — pinning the backing provider
-does return word-level timestamps — but two details differ from what a
-naive reading of the OpenAI-compatible shape would assume, and the parser
-below is written against what was actually observed, not the assumption:
+does return word-level timestamps. One detail differs from what a naive
+reading of the OpenAI-compatible shape would assume, and the parser below
+is written against what was actually observed, not the assumption: each
+word's timestamp field is named ``word``, not ``text``, and its value
+carries a **leading space** (`" The"`, not `"The"`) — Whisper's tokenizer
+convention. The parser strips it. No per-word confidence/logprob field is
+present in the ``words`` array, matching §10.5's documented assumption that
+cloud-native *word*-level confidence isn't available.
 
-* There is no ``segments`` key in this response at all (not an empty list —
-  absent). Only the flat ``words`` array is present.
-* Each word's timestamp field is named ``word``, not ``text``, and its value
-  carries a **leading space** (`" The"`, not `"The"`) — Whisper's tokenizer
-  convention. The parser strips it.
-* No per-word confidence/logprob field is present, matching §10.5's
-  documented assumption that cloud-native confidence isn't available.
+``segments`` is present only when explicitly requested: this first probe
+sent ``timestamp_granularities=["word"]`` only, and correctly got no
+``segments`` key back — that was this request not asking for it, not a gap
+in the endpoint. A follow-up probe with ``["word", "segment"]`` confirmed
+``segments`` *is* returned, each carrying ``avg_logprob`` and
+``no_speech_prob`` — real per-segment confidence signal that §10.5 didn't
+know was available (it only ruled out a *per-word* confidence field, which
+is correct). This provider still only requests ``["word"]`` and this parser
+still only reads ``words``, because word-level timestamps are this phase's
+whole scope (§21 Phase 3); ``segments``' avg_logprob/no_speech_prob is a
+candidate input for Phase 4's confidence fusion (§10.5), not consumed here.
 """
 
 from __future__ import annotations

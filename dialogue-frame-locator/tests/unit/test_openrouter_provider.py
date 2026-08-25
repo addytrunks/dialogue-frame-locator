@@ -16,7 +16,7 @@ import pytest
 
 from dfl.asr.chunking import AudioChunk
 from dfl.asr.errors import AsrError, ErrorCode
-from dfl.asr.openrouter_provider import OpenRouterAsrProvider, _parse_response
+from dfl.asr.openrouter_provider import OpenRouterAsrProvider, _parse_response, load_api_key
 from dfl.config import OpenRouterAsrConfig
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "asr" / "openrouter_verbose_json.json"
@@ -118,4 +118,22 @@ def test_missing_words_array_raises_asr_failed() -> None:
     provider = OpenRouterAsrProvider(CONFIG, api_key="k", client=_client(handler))
     with pytest.raises(AsrError) as exc_info:
         provider.transcribe(_chunk())
+    assert exc_info.value.code == ErrorCode.ASR_FAILED
+
+
+def test_load_api_key_reads_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Stub out .env loading so this test is deterministic regardless of the
+    # real dialogue-frame-locator/.env on disk (DESIGN.md §7.5: env/.env only).
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-from-env")
+
+    assert load_api_key(CONFIG) == "sk-test-from-env"
+
+
+def test_load_api_key_raises_asr_failed_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with pytest.raises(AsrError) as exc_info:
+        load_api_key(CONFIG)
     assert exc_info.value.code == ErrorCode.ASR_FAILED

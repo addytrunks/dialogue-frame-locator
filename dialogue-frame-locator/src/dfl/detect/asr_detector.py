@@ -42,16 +42,24 @@ class AsrDetector:
         self._provider = provider
         self._chunk_seconds = chunk_seconds
         self._chunk_overlap_seconds = chunk_overlap_seconds
+        # Which provider actually served each chunk of the most recent
+        # locate() call, by chunk index — set unconditionally, so this
+        # survives even when the query doesn't match anything (a future
+        # pipeline diagnostics dict can read it regardless of candidates).
+        self.last_chunk_providers: dict[int, str] = {}
 
     def locate(self, media: MediaHandle, query: str, opts: AsrDetectorOptions | None = None) -> list[Candidate]:
         chunks = list(media.iter_audio_chunks(self._chunk_seconds, self._chunk_overlap_seconds))
         transcripts = []
         chunk_providers: list[str] = []
+        self.last_chunk_providers = {}
         for chunk in chunks:
             transcripts.append(self._provider.transcribe(chunk))
             # FailoverAsrProvider tracks which concrete provider actually
             # served the call; a bare provider just reports its own name.
-            chunk_providers.append(getattr(self._provider, "last_provider", None) or self._provider.name)
+            provider = getattr(self._provider, "last_provider", None) or self._provider.name
+            chunk_providers.append(provider)
+            self.last_chunk_providers[chunk.index] = provider
 
         words = merge_transcripts(chunks, transcripts)
         return _find_candidates(words, query, chunks, chunk_providers)

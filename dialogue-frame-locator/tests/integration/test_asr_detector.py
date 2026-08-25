@@ -131,3 +131,20 @@ def test_locate_returns_no_candidates_when_query_absent() -> None:
     media = _FakeMediaHandle([chunk])
 
     assert detector.locate(media, "my mind rebels at stagnation") == []
+
+
+def test_last_chunk_providers_is_recorded_even_with_no_match() -> None:
+    """Provider diagnostics must survive a no-match run, not only a matched
+    Candidate's extra field — a future pipeline diagnostics dict needs the
+    per-chunk record regardless of whether anything matched."""
+    chunk0 = AudioChunk(index=0, start_time=0.0, end_time=5.0, wav_bytes=b"")
+    chunk1 = AudioChunk(index=1, start_time=3.5, end_time=8.5, wav_bytes=b"")
+    empty = WordTimedTranscript(words=[], language="en", provider="scripted")
+    provider = _ScriptedProvider({0: empty, 1: empty})
+    detector = AsrDetector(provider=provider, chunk_seconds=5.0, chunk_overlap_seconds=1.5)
+    media = _FakeMediaHandle([chunk0, chunk1])
+
+    candidates = detector.locate(media, "nothing to find")
+
+    assert candidates == []
+    assert detector.last_chunk_providers == {0: "scripted", 1: "scripted"}
