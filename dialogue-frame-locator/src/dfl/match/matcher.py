@@ -13,7 +13,8 @@ CascadeMatcher implements the §8.2 cascade over a word-timed transcript:
 3. Phonetic similarity — a per-position Soundex comparison, blended in as a
    tie-breaker/booster (never primary — §8.2).
 4. Semantic guard — optional, injected via the ``semantic_guard`` param
-   (typically match.semantic_guard.py's OpenRouterSemanticGuard). Weighted
+   (typically match.semantic_guard.py's OpenRouterSemanticGuard, an
+   embedding-cosine-similarity score). Weighted
    at its configured share and no more, so it can never singlehandedly push
    a score past a reasonable accept threshold (§8.2's "flag, not sufficient
    alone"), and skipped (weight redistributed to lexical+phonetic) whenever

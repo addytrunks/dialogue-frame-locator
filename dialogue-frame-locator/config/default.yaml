@@ -36,8 +36,8 @@ match:
     semantic: 0.2
   semantic_guard:
     enabled: false
-    provider: openrouter        # provider-agnostic key (Phase 4 revision: OpenRouter, not Ollama — see DECISIONS.md)
-    model: openai/gpt-4o-mini   # cheap chat model used for a bounded 0-1 similarity score
+    provider: openrouter                    # provider-agnostic key (Phase 4 revision: OpenRouter, not Ollama — see DECISIONS.md)
+    model: openai/text-embedding-3-small    # embedding model; scored via cosine similarity, not a chat call
     api_key_env: OPENROUTER_API_KEY
     timeout_seconds: 15.0
   confidence:

@@ -156,7 +156,7 @@ def test_openrouter_semantic_guard_timeout_still_completes_the_match() -> None:
         SemanticGuardConfig(
             enabled=True,
             provider="openrouter",
-            model="openai/gpt-4o-mini",
+            model="openai/text-embedding-3-small",
             api_key_env="OPENROUTER_API_KEY",
             timeout_seconds=15.0,
         ),

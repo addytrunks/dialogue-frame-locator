@@ -7,36 +7,49 @@ timeout/retryable-status handling, same env-key source via dfl.secrets)
 rather than standing up a second, local-only LLM integration path. See
 DECISIONS.md for the "why."
 
+Scores via embedding cosine similarity rather than asking a chat model to
+self-report a number: a single batched request returns both vectors, cosine
+similarity is deterministic (no prompt-wording sensitivity, no parsing a
+free-text reply), and it's cheaper per call. Response shape confirmed live
+against POST /api/v1/embeddings with model=openai/text-embedding-3-small
+(2026-08-25):
+
+    {
+      "object": "list",
+      "data": [
+        {"object": "embedding", "embedding": [0.0268..., ...], "index": 0},
+        {"object": "embedding", "embedding": [0.0141..., ...], "index": 1}
+      ],
+      "model": "openai/text-embedding-3-small", "usage": {...}, ...
+    }
+
+``data`` entries are returned in ``index`` order matching the input array,
+which this module relies on rather than re-sorting (cheaper, and the one
+live sample confirmed the ordering holds).
+
 This layer is a flag/tie-breaker, never sufficient alone (§8.2, §8.3) — the
 caller (match/matcher.py) is responsible for weighting its contribution so
 it can never singlehandedly push a score past threshold. This module's own
-job is narrower: ask a cheap chat model for a 0-1 similarity score, and
-degrade to None (never raise) on any failure — timeout, error status,
-malformed body, or a reply that doesn't parse as a number — so the pipeline
-matches on lexical/phonetic signals alone rather than crashing.
+job is narrower: return a 0-1 similarity, and degrade to None (never raise)
+on any failure — timeout, error status, malformed body, a response missing
+usable embeddings, or a zero vector (cosine is undefined against one) — so
+the pipeline matches on lexical/phonetic signals alone rather than crashing.
 """
 
 from __future__ import annotations
 
-import re
+import math
 from typing import Any
 
 import httpx
 
 from dfl.config import SemanticGuardConfig
 
-_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-_SYSTEM_PROMPT = (
-    "You compare two short phrases for semantic similarity — whether they "
-    "convey the same meaning, allowing for paraphrase. Respond with ONLY a "
-    "single number between 0 and 1 (e.g. \"0.85\"), no words, no explanation. "
-    "1.0 means the same meaning; 0.0 means unrelated meaning."
-)
-_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_ENDPOINT = "https://openrouter.ai/api/v1/embeddings"
 
 
 class OpenRouterSemanticGuard:
-    """Scores query/candidate semantic similarity via a pinned OpenRouter chat model.
+    """Scores query/candidate semantic similarity via pinned OpenRouter embeddings.
 
     Never raises: every failure mode returns None, which callers treat as
     "signal unavailable, proceed without it" (DESIGN.md §8.2's degrade-
@@ -58,10 +71,7 @@ class OpenRouterSemanticGuard:
     def score(self, query: str, candidate_text: str) -> float | None:
         body: dict[str, Any] = {
             "model": self._config.model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f'Phrase A: "{query}"\nPhrase B: "{candidate_text}"'},
-            ],
+            "input": [query, candidate_text],
         }
 
         response = self._post(body)
@@ -75,7 +85,12 @@ class OpenRouterSemanticGuard:
         except ValueError:
             return None
 
-        return _extract_score(data)
+        vectors = _extract_vectors(data)
+        if vectors is None:
+            return None
+
+        query_vec, candidate_vec = vectors
+        return _cosine_similarity(query_vec, candidate_vec)
 
     def _post(self, body: dict[str, Any]) -> httpx.Response | None:
         try:
@@ -93,23 +108,32 @@ class OpenRouterSemanticGuard:
             return None
 
 
-def _extract_score(data: dict[str, Any]) -> float | None:
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
+def _extract_vectors(data: dict[str, Any]) -> tuple[list[float], list[float]] | None:
+    entries = data.get("data")
+    if not isinstance(entries, list) or len(entries) != 2:
         return None
 
     try:
-        content = choices[0]["message"]["content"]
-    except (KeyError, TypeError, IndexError):
+        ordered = sorted(entries, key=lambda e: e["index"])
+        vectors = [[float(x) for x in e["embedding"]] for e in ordered]
+    except (KeyError, TypeError, ValueError):
         return None
 
-    match = _NUMBER_RE.search(str(content))
-    if not match:
+    if any(not v for v in vectors):
         return None
 
-    try:
-        value = float(match.group(0))
-    except ValueError:
+    return vectors[0], vectors[1]
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float | None:
+    if len(a) != len(b):
         return None
 
-    return max(0.0, min(1.0, value))
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return None
+
+    similarity = dot / (norm_a * norm_b)
+    return max(0.0, min(1.0, similarity))
