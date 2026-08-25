@@ -2,8 +2,13 @@
 
 Downloads a RemoteMedia to a local temp file (guarded by size/duration/
 timeout), probes it with ffprobe, and extracts a normalized mono 16kHz
-WAV with ffmpeg, producing a MediaHandle. iter_audio_chunks() and
-frame_at() are left as stubs for Phase 3 / Phase 2 respectively.
+WAV with ffmpeg, producing a MediaHandle. frame_at() delegates to
+dfl.media.frames; iter_audio_chunks() is still a stub for Phase 3.
+
+Probed metadata is descriptive, not authoritative. In particular it carries
+no CFR/VFR flag: that question is answered by measuring decoded frame
+timings in dfl.media.frames, not by reading frame-rate fields off the
+header, which lie on some containers.
 """
 
 from __future__ import annotations
@@ -254,20 +259,31 @@ def _parse_probe(probe: dict[str, Any]) -> dict[str, Any]:
     if duration is None and video_stream is not None:
         duration = _to_float(video_stream.get("duration"))
 
+    # No "vfr" key here, deliberately. It used to be derived from
+    # r_frame_rate vs avg_frame_rate, and that test is not sound: Matroska
+    # carries a "default duration" that makes ffprobe report both fields as one
+    # tidy constant rate even for a file whose real per-frame timestamps vary by
+    # 12x. A flag that is confidently wrong on a whole class of file is worse
+    # than no flag, and null-ing frame_number is what depends on it (§9.2).
+    #
+    # The authority is dfl.media.frames, which measures actual decoded frame
+    # timings: PyAvFrameExtractor.is_vfr(path), or equivalently a returned
+    # Frame whose frame_number is None.
     fps = None
-    vfr = False
     if video_stream is not None:
-        r_rate = _parse_rational(video_stream.get("r_frame_rate"))
-        avg_rate = _parse_rational(video_stream.get("avg_frame_rate"))
-        fps = avg_rate or r_rate
-        if r_rate is not None and avg_rate is not None and abs(r_rate - avg_rate) > 0.01:
-            vfr = True
+        # Nominal rate, for diagnostics only — on a variable-rate stream this
+        # is whatever the header claims, not a rate you can multiply t by.
+        fps = _parse_rational(video_stream.get("avg_frame_rate")) or _parse_rational(
+            video_stream.get("r_frame_rate")
+        )
 
     return {
         "duration": duration,
         "fps": fps,
-        "vfr": vfr,
         "has_audio": audio_stream is not None,
+        # Format-level start_time. NOT the offset that maps an audio-relative t
+        # onto the container timeline — that is the *audio stream's* start_time;
+        # see dfl.media.frames.audio_timeline_offset and Frame.audio_time.
         "start_time": _to_float(fmt.get("start_time")) or 0.0,
         "video_codec": video_stream.get("codec_name") if video_stream else None,
         "audio_codec": audio_stream.get("codec_name") if audio_stream else None,

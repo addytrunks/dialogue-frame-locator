@@ -100,7 +100,10 @@ def test_loads_metadata_correctly_for_known_clip(clip_with_audio: Path) -> None:
         assert meta["duration"] == pytest.approx(1.0, abs=0.2)
         assert meta["video_codec"] == "h264"
         assert meta["audio_codec"] == "aac"
-        assert meta["vfr"] is False
+        # No "vfr" key: the ffprobe frame-rate heuristic that produced it was
+        # unsound (see _parse_probe). CFR/VFR is decided from measured frame
+        # timings in dfl.media.frames, covered by tests/integration/test_frames.py.
+        assert "vfr" not in meta
 
         wav_path = handle.audio_wav()
         assert os.path.exists(wav_path)

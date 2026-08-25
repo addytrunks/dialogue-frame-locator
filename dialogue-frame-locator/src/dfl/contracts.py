@@ -107,7 +107,12 @@ class MediaHandle(Protocol):
         ...
 
     def metadata(self) -> dict[str, Any]:
-        """fps, vfr flag, duration, has_audio, start_time offsets, codec, ..."""
+        """Descriptive probe results: duration, nominal fps, has_audio, codecs, ...
+
+        Deliberately carries no CFR/VFR flag — see dfl.media.frames for why the
+        header-derived one was unsound, and use the extractor's measured check
+        (or a Frame with frame_number None) instead.
+        """
         ...
 
     def iter_audio_chunks(self, chunk_seconds: float, overlap_seconds: float):
