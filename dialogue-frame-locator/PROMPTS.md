@@ -274,4 +274,5 @@ C:\quest1\dialogue-frame-locator>uv run python -m dfl.cli --url https://www.yout
   Status    : PROCESSING_ERROR
   Error     : [DOWNLOAD_FAILED] yt-dlp download failed for 'https://www.youtube.com/watch?v=tWf4nB36poc': ERROR: You have requested merging of multiple formats but ffmpeg is not installed. Aborting due to --abort-on-error
 I would like to see logs in between the steps while running the CLI please, because I am not seeing anything right now. It's just a 5 minute YT video that I've uploaded.
- I noticed that the downloading part takes time from your code, but when I did it from test.py, this is for the same YT video that I am talking about.
+I noticed that the downloading part takes time from your code, but when I did it from test.py, this is for the same YT video that I am talking about.
+Ok, this is all working perfectly for now, the problem that i see is that for longer videos, it takes time downloading, it takes time transcribing (because more number of chunks). How would you handle that? I would like to know this for future implementation.ASR early stopping makes sense, but I was thinking parallel processing, like as the chunks keep coming in, start processing them (like a queue)

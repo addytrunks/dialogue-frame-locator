@@ -25,6 +25,7 @@ solution: add audio stream start offset
 
 PHASE 3:
 implementation of asr using operouter's whisper. 
+Chunk size at 22s because openrouter has a hard limit on per-request processing, 60s,a 25-30s chunk of audio can still take meaningfully longer than 25-30s 
 Why overlap the chunks?
 Each request is capped at ~20-25s of audio. If chunks were cut back-to-back with no overlap, a phrase spoken right at a hard cut point (eg: the words "at" / "stagnation" straddling second 22.0) would get physically split between two audio files — each chunk would hand the ASR model a half-word or half-phrase, which either transcribes badly or gets dropped near the edge (Whisper-family models are least reliable right at clip boundaries). Overlapping by 1-2s guarantees any boundary phrase appears whole in at least one of the two chunks. The cost is that the overlap region then gets transcribed twice, which is what merge_transcripts's de-dup step (midpoint-of-overlap ownership) cleans up before matching runs.
 Chunks are merged post overlapping along with de-duplication
