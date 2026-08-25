@@ -25,6 +25,7 @@ THRESHOLDS = MatchThresholds(tau_accept=0.80, tau_reject=0.40, delta=0.05, tau_c
 CONFIDENCE = ConfidenceConfig(
     weights=ConfidenceWeights(match_score=0.7, vad_agreement=0.1, provider_confidence=0.2),
     vad_agreement_placeholder=1.0,
+    vad_reject_ceiling=0.50,
 )
 
 
@@ -167,3 +168,50 @@ def test_absent_phrase_is_not_found_end_to_end() -> None:
     decision = decide(candidates, CONFIG.match.thresholds, CONFIG.match.confidence)
 
     assert decision.status == Status.NOT_FOUND
+
+
+# --- VAD veto (§6.4 step 3 feeding §10.3) -----------------------------------
+#
+# The hallucination guard is only a guard if it can change the answer. Fusing
+# vad_agreement at its configured weight cannot: a perfect text match in dead
+# silence still lands ~0.875, far above tau_c. "The audio says nobody is
+# speaking here" is categorical, not a signal to average in, so it vetoes
+# FOUND outright — and stops at AMBIGUOUS, because a VAD that missed quiet
+# speech under music is likelier than a hallucination matching the user's exact
+# query, and NOT_FOUND would assert the line is absent while hiding the
+# timestamp the user could check.
+
+
+def test_vad_rejected_onset_cannot_be_found() -> None:
+    decision = decide([_candidate(1.0)], THRESHOLDS, CONFIDENCE, vad_agreement=0.0, vad_ok=False)
+    assert decision.status == Status.AMBIGUOUS
+    assert decision.best is not None  # the timestamp stays visible for the user to check
+
+
+def test_vad_rejected_confidence_cannot_contradict_the_status() -> None:
+    decision = decide([_candidate(1.0)], THRESHOLDS, CONFIDENCE, vad_agreement=0.0, vad_ok=False)
+    assert decision.confidence <= CONFIDENCE.vad_reject_ceiling
+    assert decision.confidence < THRESHOLDS.tau_c
+
+
+def test_vad_rejection_does_not_rescue_a_match_below_tau_reject() -> None:
+    """A weak match in silence is still simply NOT_FOUND — the veto only caps, never lifts."""
+    decision = decide([_candidate(0.30)], THRESHOLDS, CONFIDENCE, vad_agreement=0.0, vad_ok=False)
+    assert decision.status == Status.NOT_FOUND
+
+
+def test_vad_confirmed_onset_still_reaches_found() -> None:
+    decision = decide([_candidate(1.0)], THRESHOLDS, CONFIDENCE, vad_agreement=1.0, vad_ok=True)
+    assert decision.status == Status.FOUND
+
+
+def test_unknown_vad_state_behaves_as_before() -> None:
+    """vad_ok=None means "not checked" — refinement may not have run yet."""
+    decision = decide([_candidate(1.0)], THRESHOLDS, CONFIDENCE)
+    assert decision.status == Status.FOUND
+
+
+def test_fuse_confidence_applies_the_ceiling_only_when_the_vad_rejected() -> None:
+    candidate = _candidate(1.0)
+    assert fuse_confidence(candidate, CONFIDENCE, 0.0, vad_ok=False) <= CONFIDENCE.vad_reject_ceiling
+    assert fuse_confidence(candidate, CONFIDENCE, 0.0, vad_ok=True) > CONFIDENCE.vad_reject_ceiling

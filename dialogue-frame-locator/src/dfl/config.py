@@ -87,6 +87,7 @@ class ConfidenceWeights:
 class ConfidenceConfig:
     weights: ConfidenceWeights
     vad_agreement_placeholder: float
+    vad_reject_ceiling: float  # highest confidence reportable when the VAD vetoes the onset
 
 
 @dataclass(frozen=True)
@@ -301,9 +302,22 @@ def _parse(raw: Any) -> Config:
         vad_agreement_placeholder=float(
             _require_type(confidence_raw, "vad_agreement_placeholder", "match.confidence", (int, float))
         ),
+        vad_reject_ceiling=float(
+            _require_type(confidence_raw, "vad_reject_ceiling", "match.confidence", (int, float))
+        ),
     )
     if not 0.0 <= confidence.vad_agreement_placeholder <= 1.0:
         raise ConfigError("match.confidence.vad_agreement_placeholder must be in [0, 1]")
+    if not 0.0 <= confidence.vad_reject_ceiling <= 1.0:
+        raise ConfigError("match.confidence.vad_reject_ceiling must be in [0, 1]")
+    # The ceiling exists so that a candidate the VAD vetoed cannot also report a
+    # confidence that reads as acceptable; at or above tau_c it would do exactly
+    # that, and the status and the number would contradict each other.
+    if confidence.vad_reject_ceiling >= thresholds.tau_c:
+        raise ConfigError(
+            "match.confidence.vad_reject_ceiling must be < match.thresholds.tau_c "
+            f"({confidence.vad_reject_ceiling} >= {thresholds.tau_c})"
+        )
 
     match = MatchConfig(thresholds=thresholds, weights=weights, semantic_guard=semantic_guard, confidence=confidence)
 

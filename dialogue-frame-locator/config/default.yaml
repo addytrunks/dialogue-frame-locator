@@ -56,7 +56,14 @@ match:
       match_score: 0.7
       vad_agreement: 0.1
       provider_confidence: 0.2
-    vad_agreement_placeholder: 1.0  # Phase 5 replaces this with a real VAD check; neutral until then
+    vad_agreement_placeholder: 1.0  # neutral value used when no VAD check has run
+                                    # (dfl.localize.refine supplies the real one)
+    # When the VAD vetoes an onset (refine reports vad_ok=False), status is
+    # capped at AMBIGUOUS and confidence at this value. Must stay below tau_c,
+    # so the reported number can never read as acceptable while the status says
+    # otherwise. Not zero: the text still matched, and the VAD may simply have
+    # missed quiet speech under music — the candidate is doubted, not erased.
+    vad_reject_ceiling: 0.50
 
 # Temporal refinement (DESIGN.md §6.3/§6.4) — turning the matched word span's
 # onset t0 into t*. Phase 5.

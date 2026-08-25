@@ -51,8 +51,14 @@ bounding the other:
   the ONNX copy that ships inside the already-pinned `faster-whisper` wheel:
   a modern neural VAD for zero new dependencies and no download. If `t0`
   isn't inside a speech region the candidate is flagged (`vad_ok=False`,
-  `vad_agreement=0.0`, which `match.confidence` fuses into the reported
-  confidence) and nothing is sharpened — that is the ASR-hallucination guard.
+  `vad_agreement=0.0`) and nothing is sharpened — that is the ASR-hallucination
+  guard. `vad_ok=False` is a **veto**, not a signal to average in: it caps
+  status at `AMBIGUOUS` and confidence at `match.confidence.vad_reject_ceiling`
+  (validated to stay below `tau_c`). It stops at `AMBIGUOUS` rather than
+  `NOT_FOUND` because a strong text match the VAD disputes is more often speech
+  the VAD missed — quiet dialogue under music, a whisper — than a hallucination
+  that happens to match the query; the timestamp stays visible for a human to
+  check. A weak match in silence still lands at `NOT_FOUND` via `tau_reject`.
   If `t0` sits within `refine.snap.max_delta_seconds` of a speech-region start
   — just after it (a late word timestamp) or just before it (an early one) —
   the onset snaps onto that boundary. The bound is what keeps a phrase that

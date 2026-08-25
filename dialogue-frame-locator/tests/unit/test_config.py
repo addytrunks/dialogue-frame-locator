@@ -105,3 +105,18 @@ def test_snap_delta_wider_than_the_vad_window_pad_raises_config_error(tmp_path: 
     bad.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError, match="window_pad"):
         load_config(bad)
+
+
+def test_vad_reject_ceiling_is_loaded(tmp_path: Path) -> None:
+    assert load_config(DEFAULT_CONFIG).match.confidence.vad_reject_ceiling == 0.50
+
+
+def test_vad_reject_ceiling_at_or_above_tau_c_raises_config_error(tmp_path: Path) -> None:
+    """The ceiling exists so a vetoed candidate's confidence can't read as acceptable."""
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace(
+        "vad_reject_ceiling: 0.50", "vad_reject_ceiling: 0.75"
+    )
+    bad = tmp_path / "bad_ceiling.yaml"
+    bad.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError, match="tau_c"):
+        load_config(bad)

@@ -300,6 +300,7 @@ def test_vad_rejection_lowers_the_fused_confidence():
     confidence_config = ConfidenceConfig(
         weights=ConfidenceWeights(match_score=0.7, vad_agreement=0.1, provider_confidence=0.2),
         vad_agreement_placeholder=1.0,
+        vad_reject_ceiling=0.50,
     )
     candidate = make_candidate()
 
