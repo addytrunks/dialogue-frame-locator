@@ -341,3 +341,4 @@ VALIDATION (§21 Phase 7):
 - APPROACH.md exists and is materially shorter than DESIGN.md — not a restatement of its section headers.
 - README.md contains zero references to Ollama, and its install section has concrete commands (not generic "install X") for every non-pip dependency actually present in the repo.
 - README + PROMPTS.md + DESIGN.md satisfy D8-D10 from §2.1 — check this explicitly against the requirements table, don't just assume.
+I have a question, we seem to be downloading the entire video first and then processing it, why? We could just download the audio file first, process it, extract the timestamp and then download the video frame at that timestamp right?

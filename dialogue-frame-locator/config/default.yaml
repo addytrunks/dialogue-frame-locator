@@ -118,7 +118,7 @@ refine:
 media:
   max_size_mb: 2048
   max_duration_seconds: 14400
-  timeout_seconds: 300
+  timeout_seconds: 3000
   # cache_dir:
   #   ./.cache/media # opt-in: reuse a previous download for the
   # same URL instead of re-fetching it (useful

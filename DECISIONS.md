@@ -59,3 +59,5 @@ Implementation of temporal refinement. The goal is to get hold of much more prec
       silero for voice-activity-detecion (vad) -> strip away silence regions
       Dynamic Time Warping (DTW) for forced-alignment (tells you exactly where these words occur in the audio), did not use a proper FAS as they pose computational cost.
       vad snap = ensures that the onset time isn't ahead of the actual onset. eg: if vad says speech started around 10s, but the target is around 10.5, then t* should be 10.5 and not 10
+
+I looked into the idea of downloading just the audio file first, process it,extract the timestamp, and download the only the frame at that timestamp to increase the download speed. But as mentioned in phase 2, audio timelines and video timelines are two different things, there's no inherent relationship between those two.
