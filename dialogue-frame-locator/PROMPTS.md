@@ -212,3 +212,7 @@ VALIDATION (§17.1, §21 Phase 5):
 - Synthetic audio with a TTS-inserted phrase at a KNOWN exact timestamp → onset error within ±100ms.
 - A silence/non-speech region gets correctly rejected by the VAD check (hallucination guard test).
 - A low-confidence match triggers the forced-alignment path; a high-confidence match does not (assert the branch taken, not just the output).
+
+Ok, am i good to proceed to the next phase? Any bugs or concerns from your side? Anything that might cause problems later?
+yes, do the follow-up commit for 3, 4 and 5, and as for 1 i would go for hard rejection/ hard downgrade, what do you think?
+its own commit before Phase 6, and yes i would prefer it as AMBIGUOUS.
