@@ -1,6 +1,39 @@
 # PROMPTS.md
 
-All prompts sent to Claude Code (or other LLM-based agentic tooling) during this project are recorded here verbatim, per DESIGN.md D9. Prompts used at design time (before implementation) are documented separately in the project's chat history / `PROMPTS.txt`; this file covers the per-phase implementation prompts sent to Claude Code.
+All prompts sent to Claude Code (or other LLM-based agentic tooling) during this project are recorded here verbatim, per DESIGN.md D9 — design-time prompts (before any code existed) and the per-phase implementation prompts, in chronological order.
+
+---
+
+## Design-Time Prompts (planning chat, pre-implementation)
+
+These are the user's questions/instructions from the planning conversation that produced `DESIGN.md`, before any implementation began. Recorded here verbatim (originally kept in `PROMPTS.txt`, merged into this file):
+
+1. What is the problem statement about? What is expected? What does the PS mean by on-screen dialogue? Can you give me an example run-through of the finished application? Starting from the user entering the video URL.
+2. Are there any projects similar to this or like this out there?
+3. Okay, what approaches would you propose, and which would you choose? I want your justifications as well.
+4. Ok, i dont think it's OCR, because in the link that they gave to me, it's a Sherlock Holmes video where he says "my mind rebels at stagnation", and i identified that he said those words at 5:34, the video had just his face, nothing else, no background text, no subtitles nothing. So does that change our problem statement?
+5. when does sherlock say "my mind rebels at stagnation"? Does he say it only once?
+6. now that we've decided that it's going to be a speech based/ASR based problem and not OCR, could you refine the prompt that I have to send to my agentic IDE to start with the planning?
+7. Refer planning_prompt.md to see the prompt
+8. Can you explain the approaches with an example walkthrough, please?
+9. Isn't this approach (D1) expensive/time-consuming? Like I am doing the ASR for every single word until I come across the matching word? I am confused as to how D1 is the best approach, could you explain more about how it works?
+10. Does the plan handle such kind of situations? When the video is, let's say, 3 hours long? What is forced alignment?
+11. could you explain section 9 for me please? I am having a hard time understanding it. What's this decoder? I dont really understand your explanation. what is codec, b-frames etc these seem like jargon to me.
+12. Ok, I've reviewed the entire plan, these are the discrepancies that I found, and would like to change that.
+13. 1. Add early-stop streaming as future work in the D (hybrid) approaches, explaining it's pros and cons.
+14. 2. I dont want to use a local model for the ASR, i am planning to use openrouter's whisper, and like the doc mentions, it should have configurations to switch between local and cloud api. (section 7)
+15. Are there any concerns regarding the plan on your side, other than my inputs? If so voice it out, and we will work on it to change the plan.
+16. Before making the changes to the DESIGN.md, how would you go about tackling those problems first? I have openrouter api key which can be used for whisper api, i have ollama too, for local inferences.
+17. Ok, i've confirmed that i have access to whisper v3, 1 both provide access to word-level timestamps, and yes i agree with you on the other points as well. Now you can go ahead with the modification of design.md
+18. Ok, noted. before that, I want you to save this chat/important context into the project memory, i am going to start a new chat, as the implementation's gonna start.
+19. In the previous chat, you asked me if i would like the actual per-phase prompts for Claude Code. I would love that, please. I would be making changes to it if required.
+20. What model and effort should I use for each phase? I want to use my tokens effectively.
+
+See `PLANNING_PROMPT.md` for the actual refined prompt (item 6/7 above) that was handed to the agentic IDE to kick off `DESIGN.md`.
+
+---
+
+## Implementation Prompts (per phase, sent to Claude Code)
 
 ---
 
