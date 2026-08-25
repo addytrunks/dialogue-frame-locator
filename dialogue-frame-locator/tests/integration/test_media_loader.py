@@ -244,9 +244,8 @@ def test_stubs_raise_not_implemented(clip_with_audio: Path) -> None:
     )
     remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
 
+    # frame_at() is no longer a stub — Phase 2 implemented it (see test_frames.py).
     with loader.load(remote) as handle:
-        with pytest.raises(NotImplementedError):
-            handle.frame_at(0.5)
         with pytest.raises(NotImplementedError):
             list(handle.iter_audio_chunks(20.0, 1.0))
 

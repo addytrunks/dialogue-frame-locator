@@ -2,13 +2,19 @@
 name = "dfl"
 version = "0.0.1"
 description = "Dialogue-to-Frame Localization: find the exact video frame at which a dialogue line is spoken."
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # floor raised from 3.10 in Phase 2: PyAV 18 requires it
 dependencies = [
     "PyYAML==6.0.3",
     "yt-dlp==2026.8.19",
-    "curl_cffi==0.16.1",  # optional at runtime (resolver falls back gracefully without it),
-                          # but required to resolve sites like ok.ru that reject yt-dlp's
-                          # plain request handler and only work with browser impersonation
+    "curl_cffi==0.16.1", # optional at runtime (resolver falls back gracefully without it),
+    # but required to resolve sites like ok.ru that reject yt-dlp's
+    # plain request handler and only work with browser impersonation
+    "av==18.1.0",     # PyAV: ffmpeg bindings behind media/frames.py — chosen over
+                      # shelling out to the ffmpeg CLI because exact-frame extraction
+                      # needs each decoded frame's real PTS (DESIGN.md §9.2), which the
+                      # CLI does not hand back reliably. Pinned: decoder behavior is
+                      # the correctness surface of this phase.
+    "pillow==12.3.0", # lossless PNG writing of the extracted frame (DESIGN.md §9.4)
 ]
 
 [project.optional-dependencies]

@@ -76,6 +76,14 @@ class MediaHandle(Protocol):
     satisfy it with lightweight fakes without depending on real decoding.
     """
 
+    def local_path(self) -> str:
+        """Path to the downloaded media file itself (video + audio, as muxed).
+
+        Frame extraction decodes this, not the WAV: the WAV has been normalized
+        to start at zero and carries no video (DESIGN.md §9.1, §12.1).
+        """
+        ...
+
     def audio_wav(self) -> str:
         """Path to a normalized mono/16kHz WAV of the media's audio track."""
         ...

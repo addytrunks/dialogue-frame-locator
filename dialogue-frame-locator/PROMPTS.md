@@ -83,3 +83,31 @@ VALIDATION:
   required to support this target.
 
   Could you please resolve that? You can browse the internet or use the context7 MCP for further clarifications. Once that's done, manually run the resolver on that site.
+   also, are you using a virutal environment? I would prefer if you used uv for running the python codes.
+
+## Phase 2 — Exact Frame Extraction
+
+You're implementing Phase 2 (exact frame extraction) — done early per DESIGN.md's roadmap because it's the highest-risk mapping. Read DESIGN.md §9 and §12 in full, then read the current repo — contracts.py, media/frames.py stub, and whatever MediaHandle looks like after Phase 1 — before writing anything.
+
+STANDING RULES:
+- Scope for THIS phase only: timestamp → exact presentation frame + PTS + PNG, correct for both CFR and VFR. No ASR, no matching, no pipeline wiring.
+- No OCR, no job queue, no HTTP API.
+- No network calls needed this phase — everything here should be testable against synthetic local media.
+- Never log or hardcode secrets.
+- Do not write or edit DECISIONS.md.
+- Before writing code, append this entire prompt verbatim to PROMPTS.md under "## Phase 2 — Exact Frame Extraction".
+- When done, summarize and STOP — don't start Phase 3.
+- Commit only this phase's work: "Phase 2: exact frame extraction".
+
+BUILD:
+- media/frames.py: FrameExtractor.frame_at(handle, t) -> (frame_number|null, pts, image), implementing §9.2's decision: timestamp-accurate seek (keyframe-before, then decode forward to the target PTS) and reading the frame's actual decoded PTS — never round(t * fps). Frame index and image must be in presentation order, not decode order (handle B-frame reordering, §9.3).
+- Set frame_number = null when the stream is VFR and a stable integer index is ill-defined (§9.2), but still return the correct image/PTS.
+- Pick and document one explicit off-by-one convention (§9.3: "frame on screen at t" = greatest PTS ≤ t, unless you deliberately choose otherwise) and apply it consistently.
+- Write PNG output (lossless, no re-encode artifacts, §9.4) to the configured output dir.
+- Use ffmpeg/PyAV (your pick, pin the dependency) behind this module so the decoder is swappable later.
+
+VALIDATION (§17.1, §17.2):
+- Generate synthetic test clips with ffmpeg with KNOWN, injected PTS — at least one constant-frame-rate clip and one genuinely variable-frame-rate clip.
+- Assert exact frame index (CFR) / null frame_number (VFR) and correct PTS against ground truth you constructed, not against eyeballing.
+- Test a clip with a non-zero container start_time offset and confirm the mapping accounts for it.
+- Test the off-by-one convention explicitly at a timestamp that lands exactly on a frame boundary.

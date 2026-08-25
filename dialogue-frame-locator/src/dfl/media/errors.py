@@ -20,6 +20,7 @@ class ErrorCode:
     TIMEOUT = "TIMEOUT"
     TOO_LARGE = "TOO_LARGE"
     NO_AUDIO = "NO_AUDIO"
+    NO_VIDEO = "NO_VIDEO"  # audio-only media: nothing to extract a frame from (§9)
     CORRUPT_MEDIA = "CORRUPT_MEDIA"
 
 

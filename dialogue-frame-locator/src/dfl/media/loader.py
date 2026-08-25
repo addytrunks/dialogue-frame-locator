@@ -53,6 +53,10 @@ class LoadedMedia:
         self._metadata = metadata
         self._closed = False
 
+    def local_path(self) -> str:
+        self._check_open()
+        return self._raw_path
+
     def audio_wav(self) -> str:
         self._check_open()
         return self._wav_path
@@ -65,7 +69,15 @@ class LoadedMedia:
         raise NotImplementedError("audio chunking lands in Phase 3 (ASR providers)")
 
     def frame_at(self, t: float) -> Frame:
-        raise NotImplementedError("frame extraction lands in Phase 2")
+        """The frame on screen at t — delegated to the default FrameExtractor.
+
+        Imported lazily so that loading/probing media does not drag the decoder
+        (and its ~26MB of ffmpeg bindings) in with it.
+        """
+        self._check_open()
+        from dfl.media.frames import PyAvFrameExtractor
+
+        return PyAvFrameExtractor().frame_at(self, t)
 
     def close(self) -> None:
         if self._closed:
