@@ -88,6 +88,19 @@ refine:
                                    # cleanly accepted is worth realigning
     trigger_word_confidence: 0.60  # native per-word confidence, when the provider reports it
     window_pad_seconds: 1.0        # §6.4 step 4: align over [t0-1s, t_end+1s]
+    max_shift_seconds: 0.5         # refinement may sharpen an onset, not relocate it.
+                                   # Word timestamps are ±0.1-0.3s (§6.2), so an
+                                   # aligned onset half a second from t0 is a
+                                   # disagreement about *which* words these are,
+                                   # not a sharper measurement of the same ones —
+                                   # keep t0, which is the safer of two answers.
+    # The alignment model, independent of asr.local.model: aligning known text
+    # is far easier than transcribing, so `small` is enough and keeps the
+    # conditional refinement affordable. Language comes from language.default,
+    # not from a second key here.
+    model: small
+    device: auto                   # auto | cpu | cuda
+    compute_type: default          # e.g. int8 on CPU, float16 on GPU
 
 media:
   max_size_mb: 2048

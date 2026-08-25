@@ -119,12 +119,23 @@ class SnapConfig:
 
 @dataclass(frozen=True)
 class AlignmentConfig:
-    """When to spend a forced alignment, and over what window (DESIGN.md §6.4 step 4)."""
+    """When to spend a forced alignment, over what window, and with what model (§6.4 step 4).
+
+    ``model``/``device``/``compute_type`` describe the *alignment* model only,
+    which is independent of ``asr.local.model``: alignment is a constrained fit
+    to text we already know, so it does not need the ASR model's size. There is
+    deliberately no ``language`` key — the aligner takes ``language.default``,
+    so the run has one language setting rather than two that can disagree.
+    """
 
     enabled: bool
     trigger_score: float
     trigger_word_confidence: float
     window_pad_seconds: float
+    max_shift_seconds: float
+    model: str
+    device: str
+    compute_type: str
 
 
 @dataclass(frozen=True)
@@ -337,6 +348,12 @@ def _parse(raw: Any) -> Config:
         window_pad_seconds=float(
             _require_type(alignment_raw, "window_pad_seconds", "refine.alignment", (int, float))
         ),
+        max_shift_seconds=float(
+            _require_type(alignment_raw, "max_shift_seconds", "refine.alignment", (int, float))
+        ),
+        model=_require_type(alignment_raw, "model", "refine.alignment", str),
+        device=_require_type(alignment_raw, "device", "refine.alignment", str),
+        compute_type=_require_type(alignment_raw, "compute_type", "refine.alignment", str),
     )
     for name, value in (
         ("trigger_score", alignment.trigger_score),
@@ -346,6 +363,26 @@ def _parse(raw: Any) -> Config:
             raise ConfigError(f"refine.alignment.{name} must be in [0, 1], got {value}")
     if alignment.window_pad_seconds < 0:
         raise ConfigError("refine.alignment.window_pad_seconds must be >= 0")
+    if alignment.max_shift_seconds < 0:
+        raise ConfigError("refine.alignment.max_shift_seconds must be >= 0")
+    for name, value in (
+        ("model", alignment.model),
+        ("device", alignment.device),
+        ("compute_type", alignment.compute_type),
+    ):
+        if not value.strip():
+            raise ConfigError(f"refine.alignment.{name} must not be empty")
+
+    # The VAD only sees [t0 - window_pad, ...], so a speech region that began
+    # earlier is reported as starting exactly at the window edge. That edge is
+    # an artifact of where we chose to look, and must stay further from t0 than
+    # any snap is allowed to travel, or the onset can snap onto it.
+    if snap.enabled and snap.max_delta_seconds >= vad.window_pad_seconds:
+        raise ConfigError(
+            "refine.snap.max_delta_seconds must be < refine.vad.window_pad_seconds "
+            f"({snap.max_delta_seconds} >= {vad.window_pad_seconds}), or the onset "
+            "can snap onto the VAD window's own edge"
+        )
 
     refine = RefineConfig(vad=vad, snap=snap, alignment=alignment)
 

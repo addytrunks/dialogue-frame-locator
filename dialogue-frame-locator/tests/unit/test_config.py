@@ -70,3 +70,38 @@ def test_negative_snap_delta_raises_config_error(tmp_path: Path) -> None:
     bad.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(bad)
+
+
+def test_alignment_model_settings_are_config_not_code(tmp_path: Path) -> None:
+    alignment = load_config(DEFAULT_CONFIG).refine.alignment
+    assert alignment.model == "small"
+    assert alignment.device == "auto"
+    assert alignment.compute_type == "default"
+    assert alignment.max_shift_seconds == 0.5
+
+
+def test_negative_max_shift_raises_config_error(tmp_path: Path) -> None:
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace(
+        "max_shift_seconds: 0.5", "max_shift_seconds: -0.5"
+    )
+    bad = tmp_path / "bad_shift.yaml"
+    bad.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(bad)
+
+
+def test_snap_delta_wider_than_the_vad_window_pad_raises_config_error(tmp_path: Path) -> None:
+    """A snap target must never be able to land on the VAD window's own edge.
+
+    Regions are found in [t0 - window_pad, ...]; a region that truly began
+    earlier gets its start reported *at* the window edge. That is only
+    unreachable as a snap target while window_pad stays wider than the snap
+    delta, so the relationship is enforced rather than left as folklore.
+    """
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace(
+        "max_delta_seconds: 0.25", "max_delta_seconds: 3.0"
+    )
+    bad = tmp_path / "bad_snap_window.yaml"
+    bad.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError, match="window_pad"):
+        load_config(bad)

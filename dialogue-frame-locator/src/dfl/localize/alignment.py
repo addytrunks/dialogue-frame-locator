@@ -48,6 +48,7 @@ import statistics
 import string
 from typing import Any
 
+from dfl.config import AlignmentConfig
 from dfl.localize.audio import read_wav_window
 from dfl.logging import get_stage_logger
 
@@ -112,22 +113,53 @@ class FasterWhisperForcedAligner:
         device: str = "auto",
         compute_type: str = "default",
         language: str = "en",
-        _model: Any | None = None,
+        model_instance: Any | None = None,
     ):
         """``model`` is the Whisper size/path used *for alignment only*.
 
         It is independent of the ASR model: alignment is a constrained fit to
         known text, so a small model is enough and keeps the refinement step
-        cheap. ``_model`` injects an already-constructed ``WhisperModel``
-        (tests, or sharing one instance with the local ASR fallback).
+        cheap. ``model_instance`` injects an already-constructed
+        ``WhisperModel`` — pass the local ASR provider's instance here rather
+        than letting two sets of Whisper weights sit in memory at once.
         """
         self._model_name = model
         self._device = device
         self._compute_type = compute_type
         self._language = language
-        self._loaded = _model
+        self._loaded = model_instance
 
-    def _model_instance(self) -> Any:
+    @classmethod
+    def from_config(
+        cls, config: AlignmentConfig, language: str, model_instance: Any | None = None
+    ) -> "FasterWhisperForcedAligner":
+        """Build an aligner from ``refine.alignment`` plus the run's language.
+
+        Language comes from ``language.default``, not from a key of its own, so
+        one run cannot transcribe in one language and align in another.
+        """
+        return cls(
+            model=config.model,
+            device=config.device,
+            compute_type=config.compute_type,
+            language=language,
+            model_instance=model_instance,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def language(self) -> str:
+        return self._language
+
+    @property
+    def loaded_model(self) -> Any | None:
+        """The ``WhisperModel`` in use, or None while nothing has been loaded yet."""
+        return self._loaded
+
+    def _ensure_model(self) -> Any:
         if self._loaded is None:
             from faster_whisper import WhisperModel  # imported late: loading costs weights
 
@@ -161,7 +193,7 @@ class FasterWhisperForcedAligner:
         from faster_whisper.audio import pad_or_trim
         from faster_whisper.tokenizer import Tokenizer
 
-        model = self._model_instance()
+        model = self._ensure_model()
 
         # Whisper's encoder consumes a fixed 30s context. Note the order: mel
         # features first, *then* pad_or_trim — faster-whisper's pad_or_trim

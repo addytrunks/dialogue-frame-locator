@@ -49,6 +49,7 @@ def make_config(
     alignment_enabled: bool = True,
     trigger_score: float = 0.80,
     trigger_word_confidence: float = 0.60,
+    max_shift_seconds: float = 0.5,
 ) -> RefineConfig:
     return RefineConfig(
         vad=VadConfig(
@@ -65,6 +66,10 @@ def make_config(
             trigger_score=trigger_score,
             trigger_word_confidence=trigger_word_confidence,
             window_pad_seconds=1.0,
+            max_shift_seconds=max_shift_seconds,
+            model="small",
+            device="auto",
+            compute_type="default",
         ),
     )
 
@@ -304,3 +309,68 @@ def test_vad_rejection_lowers_the_fused_confidence():
     assert fuse_confidence(candidate, confidence_config, in_silence.vad_agreement) < fuse_confidence(
         candidate, confidence_config, in_speech.vad_agreement
     )
+
+
+def test_alignment_that_relocates_the_onset_is_discarded():
+    """Refinement sharpens an onset; it does not get to move it somewhere else.
+
+    Word timestamps are ±0.1-0.3s (§6.2). An aligned onset most of a second
+    away is not a sharper measurement of the same words — it means the aligner
+    fitted the query somewhere the matcher did not — so t0 stands.
+    """
+    vad = FakeVad([(9.0, 12.0)])
+    aligner = FakeAligner(onset=10.9)  # 0.9s from t0=10.0
+
+    refined = refine_onset(
+        make_candidate(score=0.62), "i am your father", "a.wav", vad, make_config(), aligner
+    )
+
+    assert refined.t_star == pytest.approx(10.0)
+    assert refined.method is RefinementMethod.WORD_TIMESTAMP
+    assert refined.alignment_attempted is True
+    assert refined.alignment_used is False
+    assert refined.diagnostics["alignment_rejected"] == pytest.approx(10.9)
+
+
+def test_the_shift_bound_is_applied_after_the_region_clamp_not_before():
+    """A first-word stretch that the speech region already corrects is not a relocation.
+
+    Raw alignment lands 0.9s early — beyond the bound — but the VAD region
+    start pulls it back to 0.05s from t0. The corrected value is the answer,
+    so bounding the raw one would throw away a good refinement.
+    """
+    vad = FakeVad([(10.05, 12.0)])
+    aligner = FakeAligner(onset=9.2)
+
+    refined = refine_onset(
+        make_candidate(start=10.1, score=0.62), "i am your father", "a.wav", vad, make_config(), aligner
+    )
+
+    assert refined.method is RefinementMethod.FORCED_ALIGNMENT
+    assert refined.alignment_used is True
+    assert refined.t_star == pytest.approx(10.05)
+
+
+def test_onset_just_before_a_speech_start_snaps_forward_onto_it():
+    """Word timestamps run early as often as late — the first word especially.
+
+    An onset sitting in the silence just ahead of the speech region is the
+    mirror image of the lateness case, and gets the same bounded correction.
+    """
+    vad = FakeVad([(10.12, 12.0)])
+
+    refined = refine_onset(make_candidate(), "i am your father", "a.wav", vad, make_config(), None)
+
+    assert refined.t_star == pytest.approx(10.12)
+    assert refined.method is RefinementMethod.VAD_SNAP
+    assert refined.diagnostics["snap_delta"] == pytest.approx(-0.12)
+
+
+def test_onset_far_before_a_speech_region_is_not_snapped_forward():
+    vad = FakeVad([(10.9, 12.0)])  # 0.9s of silence ahead of it: not a timestamp wobble
+
+    refined = refine_onset(
+        make_candidate(), "i am your father", "a.wav", vad, make_config(snap_max_delta=0.25), None
+    )
+
+    assert refined.method is RefinementMethod.WORD_TIMESTAMP

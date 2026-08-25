@@ -141,9 +141,10 @@ def refine_onset(
         diagnostics["alignment_trigger"] = trigger
         align_start = max(0.0, t0 - config.alignment.window_pad_seconds)
         align_end = candidate.end_time + config.alignment.window_pad_seconds
-        aligned = _try_align(aligner, audio_path, align_start, align_end, query, diagnostics)
-        if aligned is not None and align_start <= aligned <= align_end:
-            aligned = _clamp_to_region(aligned, region, diagnostics)
+        aligned = _accepted_alignment(
+            aligner, audio_path, align_start, align_end, query, t0, region, config, diagnostics
+        )
+        if aligned is not None:
             _log.info("alignment_used t0=%.3f t*=%.3f trigger=%s", t0, aligned, trigger)
             return RefinedOnset(
                 t_star=aligned,
@@ -155,19 +156,18 @@ def refine_onset(
                 alignment_used=True,
                 diagnostics=diagnostics,
             )
-        if aligned is not None:
-            # An onset outside the window it was aligned in is not a sharper
-            # answer, it is a broken one.
-            diagnostics["alignment_rejected"] = aligned
-            _log.warning("alignment_out_of_window t0=%.3f aligned=%.3f", t0, aligned)
 
     t_star = t0
     method = RefinementMethod.WORD_TIMESTAMP
-    lateness = t0 - region[0]
-    if config.snap.enabled and 0.0 < lateness <= config.snap.max_delta_seconds:
+    # Signed: positive = the word timestamp ran late (t0 inside the region),
+    # negative = it ran early (t0 in the silence just ahead of it). Both are the
+    # same ±0.1-0.3s wobble (§6.2) around a boundary the VAD locates better, so
+    # both get the same bounded correction.
+    snap_delta = t0 - region[0]
+    if config.snap.enabled and 0.0 < abs(snap_delta) <= config.snap.max_delta_seconds:
         t_star = region[0]
         method = RefinementMethod.VAD_SNAP
-        diagnostics["snap_delta"] = lateness
+        diagnostics["snap_delta"] = snap_delta
 
     return RefinedOnset(
         t_star=t_star,
@@ -179,6 +179,51 @@ def refine_onset(
         alignment_used=False,
         diagnostics=diagnostics,
     )
+
+
+def _accepted_alignment(
+    aligner: ForcedAligner,
+    audio_path: str,
+    align_start: float,
+    align_end: float,
+    query: str,
+    t0: float,
+    region: tuple[float, float],
+    config: RefineConfig,
+    diagnostics: dict[str, Any],
+) -> float | None:
+    """Run the aligner and return its onset only if it survives every sanity check.
+
+    Three ways an alignment is refused, in order:
+
+    1. outside the window it was aligned in — not a sharper answer, a broken one;
+    2. outside the VAD's speech region — clamped onto it rather than refused,
+       since this is the systematic first-word stretch, not a wrong location;
+    3. further than ``max_shift_seconds`` from ``t0`` *after* that correction —
+       refinement may sharpen an onset, not relocate it. Word timings are
+       ±0.1-0.3s (§6.2); an aligned onset half a second away means the aligner
+       fitted the query somewhere the matcher never pointed, so ``t0`` stands.
+    """
+    aligned = _try_align(aligner, audio_path, align_start, align_end, query, diagnostics)
+    if aligned is None:
+        return None
+
+    if not align_start <= aligned <= align_end:
+        diagnostics["alignment_rejected"] = aligned
+        diagnostics["alignment_rejected_reason"] = "outside_alignment_window"
+        _log.warning("alignment_out_of_window t0=%.3f aligned=%.3f", t0, aligned)
+        return None
+
+    aligned = _clamp_to_region(aligned, region, diagnostics)
+
+    if abs(aligned - t0) > config.alignment.max_shift_seconds:
+        diagnostics["alignment_rejected"] = aligned
+        diagnostics["alignment_rejected_reason"] = "shift_exceeds_max"
+        diagnostics.pop("alignment_clamped", None)
+        _log.warning("alignment_shift_too_large t0=%.3f aligned=%.3f", t0, aligned)
+        return None
+
+    return aligned
 
 
 def _clamp_to_region(

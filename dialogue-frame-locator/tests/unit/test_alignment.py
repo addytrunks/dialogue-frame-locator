@@ -82,7 +82,7 @@ def test_empty_audio_window_returns_none_without_loading_a_model(tmp_path: Path)
         w.setframerate(16000)
         w.writeframes(b"\x00\x00" * 16000)  # 1 second of audio
 
-    aligner = FasterWhisperForcedAligner(model="tiny", _model=ExplodingModel())
+    aligner = FasterWhisperForcedAligner(model="tiny", model_instance=ExplodingModel())
 
     assert aligner.align(str(path), 5.0, 6.0, "i am your father") is None
 
@@ -97,6 +97,37 @@ def test_blank_query_returns_none_without_loading_a_model(tmp_path: Path):
         w.setframerate(16000)
         w.writeframes(b"\x00\x00" * 16000)
 
-    aligner = FasterWhisperForcedAligner(model="tiny", _model=ExplodingModel())
+    aligner = FasterWhisperForcedAligner(model="tiny", model_instance=ExplodingModel())
 
     assert aligner.align(str(path), 0.0, 1.0, "   ") is None
+
+
+def test_from_config_carries_the_configured_model_settings():
+    """The alignment model is config, not a constant buried in the aligner."""
+    from pathlib import Path as _Path
+
+    from dfl.config import load_config
+
+    config = load_config(_Path(__file__).resolve().parents[2] / "config" / "default.yaml")
+    aligner = FasterWhisperForcedAligner.from_config(
+        config.refine.alignment, language=config.language.default
+    )
+
+    assert aligner.model_name == config.refine.alignment.model
+    assert aligner.language == config.language.default
+
+
+def test_from_config_can_share_an_already_loaded_model():
+    """Phase 6 wiring must not end up with two Whisper models resident at once."""
+    from pathlib import Path as _Path
+
+    from dfl.config import load_config
+
+    config = load_config(_Path(__file__).resolve().parents[2] / "config" / "default.yaml")
+    shared = object()
+
+    aligner = FasterWhisperForcedAligner.from_config(
+        config.refine.alignment, language="en", model_instance=shared
+    )
+
+    assert aligner.loaded_model is shared

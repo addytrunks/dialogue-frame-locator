@@ -53,16 +53,25 @@ bounding the other:
   isn't inside a speech region the candidate is flagged (`vad_ok=False`,
   `vad_agreement=0.0`, which `match.confidence` fuses into the reported
   confidence) and nothing is sharpened — that is the ASR-hallucination guard.
-  If `t0` sits just *after* a speech-region start, it snaps back onto that
-  boundary, bounded by `refine.snap.max_delta_seconds` so a phrase that
-  genuinely begins mid-utterance is never dragged to the sentence start.
+  If `t0` sits within `refine.snap.max_delta_seconds` of a speech-region start
+  — just after it (a late word timestamp) or just before it (an early one) —
+  the onset snaps onto that boundary. The bound is what keeps a phrase that
+  genuinely begins mid-utterance from being dragged to the sentence start, and
+  it must stay narrower than `refine.vad.window_pad_seconds` so the snap can
+  never land on the VAD window's own edge; config validation enforces that.
 - **Conditional forced alignment (`dfl.localize.alignment`)** — only when the
   match was fuzzy or its timings were low-confidence, the query is aligned
   against `[t0-1s, t_end+1s]` using Whisper's own cross-attention DTW
   (`find_alignment`), i.e. the same mechanism that produces word timestamps,
   pointed at known text. Best-effort by design: any failure degrades to `t0`.
-  Its result is held inside the VAD's speech region, because Whisper's DTW
-  stretches the first aligned word back toward the window edge.
+  Its result is held inside the VAD's speech region (Whisper's DTW stretches
+  the first aligned word back toward the window edge) and then refused
+  outright if it still sits more than `refine.alignment.max_shift_seconds`
+  from `t0` — refinement sharpens an onset, it does not relocate it. The
+  alignment model, device and compute type are config, and
+  `FasterWhisperForcedAligner.from_config(...)` takes an optional
+  `model_instance` so a pipeline can share the local ASR provider's Whisper
+  model instead of holding two in memory.
 
 `RefinedOnset` reports which branch ran (`word_timestamp` / `vad_snap` /
 `forced_alignment`), so the number is auditable rather than merely precise.
