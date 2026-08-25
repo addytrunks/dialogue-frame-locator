@@ -112,3 +112,35 @@ VALIDATION (§17.1, §17.2):
 - Test a clip with a non-zero container start_time offset and confirm the mapping accounts for it.
 - Test the off-by-one convention explicitly at a timestamp that lands exactly on a frame boundary.
 Am i good to proceed to the next phase? Anything that is to be resolved in this phase to prevent errors down the line?
+
+---
+
+## Phase 3 — ASR Providers
+
+You're implementing Phase 3 (ASR providers) — the cloud-primary, local-fallback transcription stage. Read DESIGN.md §7 and §17.4 in full, then read the current repo — asr/base.py stub, contracts.py, and config/default.yaml's asr.* keys from Phase 0 — before writing anything.
+
+Before you write the OpenRouter parser: DESIGN.md's §7.5/A9 claim that pinning the backing provider (openai/groq/together) returns word-level verbose_json timestamps was "confirmed by direct testing" — that testing happened at design time, not now. Pull one live sample from the actual OpenRouter endpoint manually and check the real response shape before you build a parser against assumed field names. Note what you find in your summary, and flag it to me if the schema doesn't match what DESIGN.md describes.
+
+STANDING RULES:
+- Scope for THIS phase only: audio → word-level timestamped transcript. Chunking (~20-25s, 1-2s overlap) applies to EVERY request, not just long audio (A10) — the cloud provider's ~60s/request timeout is a hard constraint, not an optimization. No matching, no frame logic, no pipeline wiring.
+- No OCR, no job queue, no HTTP API.
+- Mock the OpenRouter HTTP calls in all automated/CI tests using golden fixture responses. The one live-sample check above is manual and separate from the test suite.
+- OPENROUTER_API_KEY comes from environment/.env only — verify .env is actually in .gitignore before you touch anything that reads it.
+- Do not write or edit DECISIONS.md.
+- Before writing code, append this entire prompt verbatim to PROMPTS.md under "## Phase 3 — ASR Providers".
+- When done, summarize and STOP — don't start Phase 4.
+- Commit only this phase's work: "Phase 3: ASR providers (cloud + local fallback)".
+
+BUILD:
+- asr/openrouter_provider.py: OpenRouterAsrProvider — model openai/whisper-large-v3, provider.only explicitly pinned (never left to auto-routing), response_format=verbose_json, timestamp_granularities=[word], audio sent via the base64 input_audio JSON path (not multipart, to dodge the 25MB cap).
+- asr/chunking.py: shared chunk + overlap + de-dup logic used by both providers — de-dup matches that appear in both the tail of one chunk and the head of the next by time proximity (§7.5, tested explicitly).
+- asr/faster_whisper_provider.py: FasterWhisperAsrProvider, local fallback, same word-timed output shape.
+- Wire automatic failover in the AsrProvider layer: on timeout/5xx/rate-limit from OpenRouter, retry the same chunk against faster-whisper; if both fail, surface ASR_UNAVAILABLE under PROCESSING_ERROR (§11) — never a silently degraded result.
+- detect/asr_detector.py: AsrDetector implementing the Detector protocol from Phase 0, using the AsrProvider to produce Candidates.
+- Record which provider actually served each request in diagnostics.
+
+VALIDATION (§17.2, §21 Phase 3):
+- Golden mocked transcript test: assert the parser correctly extracts word-level times from a realistic fixture response (the ±0.1-0.3s tolerance claim isn't testable against a mock — that's a real-audio benchmark concern for Phase 7).
+- Chunk-boundary overlap de-dup test: a phrase split across two overlapping mocked chunks produces exactly one candidate, not two.
+- Failover test: mock OpenRouter raising timeout/5xx → assert faster-whisper fires automatically and the run completes.
+- Both-fail test: mock both providers failing → assert ASR_UNAVAILABLE/PROCESSING_ERROR, not a crash or a wrong-but-confident result.

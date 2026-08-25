@@ -18,3 +18,5 @@ tmp/
 *.mkv
 *.png
 !tests/fixtures/**
+tests/fixtures/**/__pycache__/
+tests/fixtures/**/*.pyc

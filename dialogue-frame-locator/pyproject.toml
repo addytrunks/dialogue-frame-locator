@@ -15,6 +15,12 @@ dependencies = [
                       # CLI does not hand back reliably. Pinned: decoder behavior is
                       # the correctness surface of this phase.
     "pillow==12.3.0", # lossless PNG writing of the extracted frame (DESIGN.md §9.4)
+    "httpx==0.28.1",  # OpenRouterAsrProvider's HTTP client (DESIGN.md §7.5) — pinned to the
+                      # version faster-whisper's own dependency chain already resolves to,
+                      # so there is one version of it in the environment, not two.
+    "faster-whisper==1.2.1",  # local ASR fallback, word-level timestamps (DESIGN.md §7.3)
+    "python-dotenv==1.2.3",   # loads OPENROUTER_API_KEY from .env into the environment
+                              # (DESIGN.md §7.5 — env/.env only, never hardcoded)
 ]
 
 [project.optional-dependencies]

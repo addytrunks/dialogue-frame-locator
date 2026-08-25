@@ -3,7 +3,8 @@
 Downloads a RemoteMedia to a local temp file (guarded by size/duration/
 timeout), probes it with ffprobe, and extracts a normalized mono 16kHz
 WAV with ffmpeg, producing a MediaHandle. frame_at() delegates to
-dfl.media.frames; iter_audio_chunks() is still a stub for Phase 3.
+dfl.media.frames; iter_audio_chunks() delegates to dfl.asr.chunking
+(DESIGN.md §7.5, implemented in Phase 3).
 
 Probed metadata is descriptive, not authoritative. In particular it carries
 no CFR/VFR flag: that question is answered by measuring decoded frame
@@ -71,7 +72,13 @@ class LoadedMedia:
         return dict(self._metadata)
 
     def iter_audio_chunks(self, chunk_seconds: float, overlap_seconds: float):
-        raise NotImplementedError("audio chunking lands in Phase 3 (ASR providers)")
+        """Overlapping audio chunks for ASR (DESIGN.md §7.5) — delegated to
+        dfl.asr.chunking, imported lazily so loading/probing media does not
+        drag in the ASR stack."""
+        self._check_open()
+        from dfl.asr.chunking import chunk_wav
+
+        return chunk_wav(self._wav_path, chunk_seconds, overlap_seconds)
 
     def frame_at(self, t: float) -> Frame:
         """The frame on screen at t — delegated to the default FrameExtractor.

@@ -1,0 +1,22 @@
+{
+  "text": " The stale smell of old beer lingers.",
+  "task": "transcribe",
+  "language": "en",
+  "duration": 3.6,
+  "words": [
+    {"word": " The", "start": 0.66, "end": 1.36},
+    {"word": " stale", "start": 1.36, "end": 1.82},
+    {"word": " smell", "start": 1.82, "end": 2.04},
+    {"word": " of", "start": 2.04, "end": 2.38},
+    {"word": " old", "start": 2.38, "end": 2.64},
+    {"word": " beer", "start": 2.64, "end": 2.92},
+    {"word": " lingers.", "start": 2.92, "end": 3.60}
+  ],
+  "usage": {
+    "seconds": 3.6,
+    "total_tokens": 22,
+    "input_tokens": 16,
+    "output_tokens": 6,
+    "cost": 0.000027
+  }
+}
