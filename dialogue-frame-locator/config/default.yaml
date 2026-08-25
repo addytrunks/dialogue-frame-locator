@@ -1,0 +1,45 @@
+# Default configuration (DESIGN.md §16.3).
+# Every tunable used anywhere in the pipeline is named here, even though
+# nothing reads most of these yet in Phase 0 — no magic numbers in code,
+# and nothing should need renaming later.
+
+asr:
+  provider: openrouter          # openrouter (primary) | local (faster-whisper fallback)
+  openrouter:
+    model: openai/whisper-large-v3
+    provider_pin: ["openai"]    # backing hosts that honor verbose_json + word timestamps
+    api_key_env: OPENROUTER_API_KEY
+  local:
+    model: large-v3
+  chunk_seconds: 22.0
+  chunk_overlap_seconds: 1.5
+  early_stop: false             # D6 — off by default, correctness-preserving
+
+language:
+  default: en
+  auto_detect: false
+
+match:
+  thresholds:
+    tau_accept: 0.75
+    tau_reject: 0.40
+    delta: 0.05                # AMBIGUOUS band: other candidate within best * (1 - delta)
+    tau_c: 0.60                # minimum fused confidence required for FOUND
+  weights:
+    lexical: 0.6
+    phonetic: 0.2
+    semantic: 0.2
+  semantic_guard:
+    enabled: false
+    ollama_model: nomic-embed-text
+
+media:
+  max_size_mb: 2048
+  max_duration_seconds: 14400
+  timeout_seconds: 300
+
+output:
+  dir: ./out
+
+detector:
+  default: asr                 # asr (this pass) | ocr (future, not implemented)

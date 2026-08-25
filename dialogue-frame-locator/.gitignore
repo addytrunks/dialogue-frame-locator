@@ -1,0 +1,20 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+out/
+tmp/
+*.tmp
+
+# downloaded/generated media artifacts (not source)
+*.wav
+*.mp4
+*.mkv
+*.png
+!tests/fixtures/**
