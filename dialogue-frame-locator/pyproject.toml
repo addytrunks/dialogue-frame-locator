@@ -5,6 +5,7 @@ description = "Dialogue-to-Frame Localization: find the exact video frame at whi
 requires-python = ">=3.10"
 dependencies = [
     "PyYAML==6.0.3",
+    "yt-dlp==2026.8.19",
 ]
 
 [project.optional-dependencies]
