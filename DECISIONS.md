@@ -30,3 +30,25 @@ Each request is capped at ~20-25s of audio. If chunks were cut back-to-back with
 Chunks are merged post overlapping along with de-duplication
 concern: the response output did not have segment metadata in it.
 solution: add 'segments' to timestamp_granularities in the body.
+
+PHASE 4:
+Implementation for phrase matching and returning the confidence.
+Semantic similarity is given the least weightage as we are looking for exact-word match and not semantically similar sentences, therefore it should be used as a last resort.
+Lexical similarity => Token overlap (no of words that are same), character level similarity (difflib)
+Phonetic Similarity => Phoeneme level similarity (smallest unit of sound)
+Exact match
+      ↓
+fuzzy word similarity
+      ↓
+character similarity
+      ↓
+phonetic similarity
+      ↓
+optional semantic similarity
+      ↓
+combined score
+      ↓
+remove duplicates
+      ↓
+return candidates
+Switched from ollama to openrouter for semantic similarity to stay consistent.

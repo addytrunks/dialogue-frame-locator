@@ -181,3 +181,13 @@ VALIDATION (§17.1, §21 Phase 4):
 - No match above τ_reject → NOT_FOUND.
 - Table-driven tests over the §10.3 decision policy covering every branch.
 - A test that mocks the OpenRouter semantic-guard call failing (timeout/5xx) and confirms matching still completes without the semantic layer, using only the lexical/phonetic signals.
+Regarding phase 4 prompt, is Ollama really required? I could once again go with OpenRouter
+semantic_guard:
+    enabled: false
+    provider: openrouter        # provider-agnostic key (Phase 4 revision: OpenRouter, not Ollama — see DECISIONS.md)
+    model: openai/gpt-4o-mini   # cheap chat model used for a bounded 0-1 similarity score
+    api_key_env: OPENROUTER_API_KEY
+    timeout_seconds: 15.0
+
+is this good? Looks like it's using the 4o-mini to compute the similarity. I think using an embedding model, computing the similarity between the two vectos would make more sense?
+I dont understand one thing, is the embedding being applied word by word, or to the entire sentence in that window (k)?
