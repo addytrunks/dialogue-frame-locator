@@ -134,16 +134,22 @@ class PyAvFrameExtractor:
             # which ffmpeg normalises to zero. The container's own timeline may
             # start later (MPEG-TS routinely does), so shift t onto it before
             # comparing against any PTS.
-            target = t + _container_start_offset(container)
+            offset = audio_timeline_offset(container)
+            target = t + offset
 
             av_frame = self._decode_frame_on_screen(container, stream, target)
             pts = float(av_frame.pts * stream.time_base)
+            # Convert before touching the container again: _is_vfr seeks and
+            # demuxes, and a decoded frame is easier to reason about once it is
+            # already a plain image.
+            image = av_frame.to_image()  # PIL RGB image
             vfr = self._is_vfr(container, stream)
 
             return Frame(
                 frame_number=None if vfr else _nominal_frame_number(stream, pts),
                 pts=pts,
-                image=av_frame.to_image(),  # PIL RGB image
+                image=image,
+                start_offset=offset,
             )
         except av.FFmpegError as exc:
             raise MediaError(ErrorCode.CORRUPT_MEDIA, f"decode failed for {path!r}: {exc}") from exc
@@ -304,20 +310,33 @@ def png_filename(frame: Frame) -> str:
     return f"frame_{frame.frame_number:06d}_t{stamp}s.png"
 
 
-def _container_start_offset(container: Any) -> float:
-    """Container start_time in seconds — the shift from audio time to PTS.
+def audio_timeline_offset(container: Any) -> float:
+    """Seconds to add to an audio-relative ``t`` to land on the container timeline.
 
-    The *format*-level start time, not the video stream's: when ffmpeg extracts
-    the audio track it normalises the output so that the earliest timestamp in
-    the file becomes zero. That earliest timestamp is the format start_time, so
-    it is the offset that puts an audio-relative ``t`` back on the container's
-    timeline. Using the video stream's own start_time instead would silently
-    swallow any A/V offset between the two streams (§9.3).
+    This is the **audio stream's** start_time — not the video stream's, and not
+    the format's (§9.3).
+
+    Why the audio stream: ``t`` is measured on the WAV that ffmpeg extracted, and
+    ffmpeg writes that WAV starting at the audio's own first sample. It does not
+    pad the head with silence to represent a stream that starts late, so WAV
+    second 0 *is* the audio stream's start_time on the container timeline.
+
+    Why not the format start_time, which is the tempting choice: the format start
+    is the earliest timestamp across *all* streams. When the audio leads (an
+    MPEG-TS mux, typically) the two are equal and either works. When the **video**
+    leads, the format start is the video's, and using it drops the entire A/V gap
+    — half a second of skew is a dozen frames at 25fps. The two only look
+    interchangeable on files where audio happens to come first.
+
+    Falls back to the format start_time for video-only media, which has no audio
+    timeline to be relative to.
     """
-    start = container.start_time
-    if start is None or start == av.time_base * -(2**63):  # AV_NOPTS_VALUE guard
-        return 0.0
-    return start / av.time_base
+    for stream in container.streams.audio:
+        if stream.start_time is not None:
+            return float(stream.start_time * stream.time_base)
+
+    start = container.start_time  # PyAV returns None for AV_NOPTS_VALUE
+    return 0.0 if start is None else start / av.time_base
 
 
 def _nominal_frame_number(stream: Any, pts: float) -> int | None:

@@ -34,11 +34,29 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Frame:
-    """A decoded video frame and its presentation metadata (DESIGN.md §9)."""
+    """A decoded video frame and its presentation metadata (DESIGN.md §9).
+
+    Two timelines meet here, and confusing them is the easiest way to be wrong
+    by several frames:
+
+    * ``pts`` is on the **container** timeline, which need not start at zero.
+    * The ``t`` passed to ``frame_at`` is on the **audio** timeline — seconds
+      from the first sample of the extracted WAV, which is what ASR reports.
+
+    ``start_offset`` is the distance between them, so use ``audio_time`` — not
+    ``pts`` — for anything compared against ASR timings or reported to a user
+    as ``Result.time_seconds``.
+    """
 
     frame_number: int | None  # null when VFR makes it ill-defined ("where applicable")
     pts: float
-    image: Any  # decoded RGB image; concrete type fixed when media/frames.py is implemented
+    image: Any  # decoded RGB image (PIL.Image.Image from the PyAV extractor)
+    start_offset: float = 0.0  # container-timeline seconds at audio time 0
+
+    @property
+    def audio_time(self) -> float:
+        """This frame's presentation time on the audio/ASR timeline."""
+        return self.pts - self.start_offset
 
 
 @dataclass(frozen=True)

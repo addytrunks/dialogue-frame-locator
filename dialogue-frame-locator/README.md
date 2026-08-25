@@ -27,6 +27,15 @@ reporting only; it is `null` on variable-frame-rate streams, where no stable
 integer index exists. `pts` is always canonical. Frames are written as
 lossless PNGs into the configured `output.dir`.
 
+**Two timelines.** `t` is on the *audio* timeline (seconds from the first
+sample of the extracted WAV — what ASR reports); `Frame.pts` is on the
+*container* timeline, which need not start at zero. `Frame.start_offset` is
+the distance between them, taken from the **audio stream's** `start_time`, not
+the format's — those differ whenever video starts before audio. Use
+`Frame.audio_time` (`pts - start_offset`) for anything compared against ASR
+timings or reported as `Result.time_seconds`; comparing a raw `pts` against an
+ASR timestamp is a multi-frame error on any file with A/V skew.
+
 Requires the `ffmpeg`/`ffprobe` CLI on `PATH` for media loading; the tests that
 need it skip themselves when it is absent.
 

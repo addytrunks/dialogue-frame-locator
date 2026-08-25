@@ -75,7 +75,8 @@ class SyntheticClip:
     path: Path
     pts: tuple[float, ...]  # per-frame presentation time, seconds, container timeline
     colors: tuple[tuple[int, int, int], ...]
-    start_offset: float  # container start_time; audio second 0 maps to this PTS
+    audio_start: float  # audio stream start_time == container time of WAV second 0
+    format_start: float  # earliest timestamp across all streams
     fps: float | None  # nominal rate, None for the VFR clip
 
     @property
@@ -125,15 +126,30 @@ def probe_pts(path: Path) -> list[float]:
     return sorted(times)
 
 
-def probe_start_time(path: Path) -> float:
+def probe_start_times(path: Path) -> tuple[float, float]:
+    """(audio stream start_time, format start_time), both in seconds.
+
+    Kept separate on purpose: they coincide whenever the audio track happens to
+    start first, which is what let a bug live between them.
+    """
     proc = subprocess.run(
-        [FFPROBE or "ffprobe", "-v", "error", "-show_format", "-print_format", "json", str(path)],
+        [
+            FFPROBE or "ffprobe", "-v", "error",
+            "-show_format", "-show_streams", "-print_format", "json", str(path),
+        ],
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"ffprobe failed (exit {proc.returncode}):\n{proc.stderr[-4000:]}")
-    return float(json.loads(proc.stdout)["format"].get("start_time") or 0.0)
+    probe = json.loads(proc.stdout)
+    format_start = float(probe["format"].get("start_time") or 0.0)
+    audio_start = next(
+        (float(s["start_time"]) for s in probe["streams"]
+         if s.get("codec_type") == "audio" and s.get("start_time") is not None),
+        format_start,
+    )
+    return audio_start, format_start
 
 
 def make_cfr_clip(
@@ -186,11 +202,67 @@ def make_cfr_clip(
 
     expected = [ts_offset + i / fps for i in range(frames)]
     _assert_timings(out, expected)
+    audio_start, format_start = probe_start_times(out)
     return SyntheticClip(
         path=out,
         pts=tuple(expected),
         colors=tuple(frame_color(i) for i in range(frames)),
-        start_offset=probe_start_time(out),
+        audio_start=audio_start,
+        format_start=format_start,
+        fps=float(fps),
+    )
+
+
+def make_late_audio_clip(
+    dirpath: Path,
+    frames: int = 50,
+    fps: int = 25,
+    delay: float = 0.5,
+    name: str = "late_audio.mkv",
+) -> SyntheticClip:
+    """Video starts at PTS 0; the **audio stream starts ``delay`` seconds later**.
+
+    The mirror image of the MPEG-TS offset fixture, and the case that exposes the
+    difference between the format start_time and the audio stream's. Here the
+    format start is the video's 0.0 while the extracted WAV's second 0 sits at
+    ``delay`` on the container timeline — so anything using the format start
+    drops the whole gap (``delay * fps`` frames of error).
+    """
+    src = dirpath / "src_late"
+    src.mkdir(parents=True, exist_ok=True)
+    _write_source_frames(src, frames)
+    out = dirpath / name
+
+    _run(
+        [
+            FFMPEG or "ffmpeg", "-y",
+            "-framerate", str(fps), "-i", str(src / "f%04d.png"),
+            # -itsoffset delays the audio input's timestamps relative to the video.
+            "-itsoffset", str(delay),
+            "-f", "lavfi", "-i", f"anullsrc=r=16000:cl=mono:d={frames / fps}",
+            "-c:v", "libx264rgb", "-qp", "1",
+            "-bf", "3", "-b_strategy", "0", "-g", "12", "-sc_threshold", "0",
+            "-pix_fmt", "rgb24",
+            "-c:a", "pcm_s16le",   # uncompressed: no codec priming delay to muddy the offset
+            "-shortest", "-fps_mode", "cfr",
+            str(out),
+        ]
+    )
+
+    expected = [i / fps for i in range(frames)]
+    _assert_timings(out, expected)
+    audio_start, format_start = probe_start_times(out)
+    if audio_start - format_start < delay * 0.5:
+        raise RuntimeError(
+            f"{name}: audio was meant to start ~{delay}s after the video, but "
+            f"audio_start={audio_start} format_start={format_start}"
+        )
+    return SyntheticClip(
+        path=out,
+        pts=tuple(expected),
+        colors=tuple(frame_color(i) for i in range(frames)),
+        audio_start=audio_start,
+        format_start=format_start,
         fps=float(fps),
     )
 
@@ -240,12 +312,14 @@ def make_vfr_clip(dirpath: Path, name: str = "vfr.mkv") -> SyntheticClip:
         acc += dur
     actual = probe_pts(out)[:count]
     _assert_timings(out, expected, actual=actual)
+    audio_start, format_start = probe_start_times(out)
 
     return SyntheticClip(
         path=out,
         pts=tuple(actual),  # encoder-quantised timestamps, cross-checked above
         colors=tuple(frame_color(i) for i in range(count)),
-        start_offset=probe_start_time(out),
+        audio_start=audio_start,
+        format_start=format_start,
         fps=None,
     )
 

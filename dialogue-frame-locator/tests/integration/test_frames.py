@@ -31,14 +31,20 @@ CFR_FPS = 25
 CFR_FRAMES = 50
 
 
-# Encoding three clips is slow enough to be worth doing once for the module.
+AUDIO_DELAY = 0.5
+
+
+# Encoding the clips is slow enough to be worth doing once for the module.
 @pytest.fixture(scope="module")
 def clips(tmp_path_factory) -> dict[str, synth.SyntheticClip]:
     d = tmp_path_factory.mktemp("clips")
     return {
         "cfr": synth.make_cfr_clip(d, frames=CFR_FRAMES, fps=CFR_FPS),
         "vfr": synth.make_vfr_clip(d),
+        # Audio leads video (format start == audio start).
         "offset": synth.make_cfr_clip(d, frames=30, fps=CFR_FPS, name="offset.ts", ts_offset=5.0),
+        # Video leads audio (format start != audio start) — the opposite skew.
+        "late_audio": synth.make_late_audio_clip(d, frames=CFR_FRAMES, fps=CFR_FPS, delay=AUDIO_DELAY),
     }
 
 
@@ -211,17 +217,17 @@ def test_start_time_offset_is_applied(clips, extractor):
     comparison; skipping that lands several frames off.
     """
     clip = clips["offset"]
-    assert clip.start_offset > 0.1, "fixture lost its non-zero container start_time"
+    assert clip.audio_start > 0.1, "fixture lost its non-zero container start_time"
     assert clip.pts[0] == pytest.approx(5.0, abs=0.01)
 
     # Audio time of video frame 0 = its PTS minus the offset the WAV was normalised by.
-    audio_t_of_frame_0 = clip.pts[0] - clip.start_offset
+    audio_t_of_frame_0 = clip.pts[0] - clip.audio_start
     frame = extractor.frame_at_path(str(clip.path), audio_t_of_frame_0)
     assert frame.frame_number == 0
     _assert_is(clip, frame, 0)
 
     # And a general timestamp mid-clip.
-    audio_t = clip.pts[10] + 0.02 - clip.start_offset
+    audio_t = clip.pts[10] + 0.02 - clip.audio_start
     frame = extractor.frame_at_path(str(clip.path), audio_t)
     assert frame.frame_number == 10
     _assert_is(clip, frame, 10)
@@ -231,10 +237,52 @@ def test_start_time_offset_is_applied(clips, extractor):
     assert naive.frame_number != 10
 
 
+def test_offset_uses_the_audio_streams_start_not_the_formats(clips, extractor):
+    """The skew that hides when audio happens to come first (DESIGN.md §9.3).
+
+    On the `offset` clip the audio leads, so the format start_time and the audio
+    stream's start_time are the same number and either one maps t correctly.
+    Here the *video* leads: the format starts at 0.0 while the extracted WAV's
+    second 0 sits half a second into the container. Using the format start drops
+    that gap entirely — 12 frames at 25fps.
+    """
+    clip = clips["late_audio"]
+    assert clip.format_start == pytest.approx(0.0, abs=0.01)
+    assert clip.audio_start == pytest.approx(AUDIO_DELAY, abs=0.05)
+    assert clip.audio_start - clip.format_start > 0.1, "fixture lost its A/V skew"
+
+    for audio_t in (0.0, 0.2, 0.44, 1.0):
+        expected = int((audio_t + clip.audio_start) * CFR_FPS + 1e-9)
+        frame = extractor.frame_at_path(str(clip.path), audio_t)
+        assert frame.frame_number == expected, f"audio t={audio_t} -> frame {frame.frame_number}"
+        _assert_is(clip, frame, expected)
+
+        # What the format-start-time reading would have returned.
+        naive = int((audio_t + clip.format_start) * CFR_FPS + 1e-9)
+        assert naive != expected, "fixture no longer distinguishes the two offsets"
+
+
+def test_frame_audio_time_converts_back_to_the_asr_timeline(clips, extractor):
+    """Frame.audio_time undoes the offset, so callers never compare across timelines."""
+    for key in ("cfr", "offset", "late_audio"):
+        clip = clips[key]
+        audio_t = 0.62
+        frame = extractor.frame_at_path(str(clip.path), audio_t)
+
+        assert frame.start_offset == pytest.approx(clip.audio_start, abs=0.05)
+        assert frame.pts == pytest.approx(frame.audio_time + frame.start_offset, abs=1e-9)
+        # The frame on screen at t starts at or before t, within one frame of it.
+        # The lower bound carries the same float-noise tolerance the extractor
+        # uses for its "PTS <= t" comparison: audio_time is pts - offset, and
+        # both are floats reconstructed from rationals.
+        lag = audio_t - frame.audio_time
+        assert -1e-9 <= lag < 1.0 / CFR_FPS + 1e-6, f"{key}: lag={lag}"
+
+
 def test_frame_number_is_zero_based_from_the_streams_own_first_frame(clips, extractor):
     """A container starting at 5s still calls its first frame 0, not frame 125."""
     clip = clips["offset"]
-    frame = extractor.frame_at_path(str(clip.path), clip.pts[0] - clip.start_offset)
+    frame = extractor.frame_at_path(str(clip.path), clip.pts[0] - clip.audio_start)
     assert frame.frame_number == 0
     assert frame.pts == pytest.approx(5.0, abs=1e-6)
 
@@ -242,7 +290,7 @@ def test_frame_number_is_zero_based_from_the_streams_own_first_frame(clips, extr
 def test_timestamp_before_the_first_frame_returns_frame_zero(clips, extractor):
     """t=0 on the offset clip precedes the first video frame; frame 0 is the answer."""
     clip = clips["offset"]
-    assert clip.pts[0] - clip.start_offset > 0, "fixture: video no longer starts after audio"
+    assert clip.pts[0] - clip.audio_start > 0, "fixture: video no longer starts after audio"
 
     frame = extractor.frame_at_path(str(clip.path), 0.0)
     assert frame.frame_number == 0
@@ -326,8 +374,8 @@ def test_handle_timestamps_agree_with_the_extracted_wav_timeline(clips, tmp_path
     """The offset clip, end to end: t is measured on the WAV the loader produced."""
     clip = clips["offset"]
     with _load_handle(clip.path, tmp_path) as handle:
-        assert handle.metadata()["start_time"] == pytest.approx(clip.start_offset, abs=0.01)
-        frame = handle.frame_at(clip.pts[5] - clip.start_offset)
+        assert handle.metadata()["start_time"] == pytest.approx(clip.audio_start, abs=0.01)
+        frame = handle.frame_at(clip.pts[5] - clip.audio_start)
     assert frame.frame_number == 5
 
 
