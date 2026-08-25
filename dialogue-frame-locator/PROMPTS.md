@@ -111,3 +111,4 @@ VALIDATION (§17.1, §17.2):
 - Assert exact frame index (CFR) / null frame_number (VFR) and correct PTS against ground truth you constructed, not against eyeballing.
 - Test a clip with a non-zero container start_time offset and confirm the mapping accounts for it.
 - Test the off-by-one convention explicitly at a timestamp that lands exactly on a frame boundary.
+Am i good to proceed to the next phase? Anything that is to be resolved in this phase to prevent errors down the line?
