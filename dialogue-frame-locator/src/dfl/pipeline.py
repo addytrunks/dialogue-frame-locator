@@ -73,11 +73,13 @@ def run(
 
     media: Any = None
     try:
+        _log.info("resolving %s", url)
         try:
             remote = resolver.resolve(url)
         except MediaError as exc:
             return _error_result(exc.to_error_info(), query, detector.name)
 
+        _log.info("downloading/loading media (this may take a while for large or slow-hosted videos)")
         try:
             media = loader.load(remote)
         except MediaError as exc:
@@ -86,16 +88,25 @@ def run(
                 return _not_found_result(query, detector.name, reason=exc.message)
             return _error_result(exc.to_error_info(), query, detector.name)
 
+        meta = media.metadata()
+        _log.info(
+            "media ready: duration=%ss fps=%s has_audio=%s",
+            meta.get("duration"), meta.get("fps"), meta.get("has_audio"),
+        )
+
+        _log.info("running %s detector for %r", detector.name, query)
         try:
             candidates = detector.locate(media, query, None)
         except (MediaError, AsrError) as exc:
             return _error_result(exc.to_error_info(), query, detector.name)
+        _log.info("%s detector returned %d candidate(s)", detector.name, len(candidates))
 
         ranked = sorted(candidates, key=lambda c: c.score, reverse=True)
         best: Candidate | None = ranked[0] if ranked else None
 
         refined: RefinedOnset | None = None
         if best is not None and best.score >= thresholds.tau_reject:
+            _log.info("refining onset for the best candidate (score=%.2f, t0=%.3fs)", best.score, best.start_time)
             refined = refine_onset(best, query, media.audio_wav(), vad, config.refine, aligner)
 
         decision = decide(
@@ -105,6 +116,7 @@ def run(
             vad_agreement=refined.vad_agreement if refined else None,
             vad_ok=refined.vad_ok if refined else None,
         )
+        _log.info("decision: %s (confidence=%.2f)", decision.status.value, decision.confidence)
 
         if decision.best is None:
             return Result(
@@ -124,11 +136,13 @@ def run(
         assert refined is not None  # invariant: decision.best set <=> best.score >= tau_reject <=> refined ran
         t_star = refined.t_star
 
+        _log.info("extracting frame at t=%.3fs", t_star)
         try:
             frame = frame_extractor.frame_at(media, t_star)
         except MediaError as exc:
             return _error_result(exc.to_error_info(), query, detector.name)
         image_path = _write_png(frame, out_dir)
+        _log.info("wrote %s", image_path)
 
         return Result(
             status=decision.status,

@@ -241,3 +241,8 @@ VALIDATION (§17.3, §21 Phase 6):
 - Synthetic end-to-end test: TTS phrase inserted at a known timestamp over a known frame pattern → CLI run → assert status=FOUND, onset within ±1 frame, correct frame_number, PNG written, exit code 0.
 - Real run on the ok.ru example (manual, not CI) produces a plausible, inspectable frame — report what you actually got (timestamp, frame, matched text, confidence) in your summary so I can sanity-check it against the ~5:34 mark I already confirmed by ear.
 - At minimum, one test each for NOT_FOUND, AMBIGUOUS, and PROCESSING_ERROR (bad URL) end-to-end paths.
+Ok, i am facing a problem now, when i run the cli on the ok.ru video, it's taking too long to download (~ 40 mins), i am given these three choices.
+
+implement early-stop now, 
+just let it run in the background
+lower-quality video format.

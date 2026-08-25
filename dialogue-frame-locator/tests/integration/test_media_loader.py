@@ -71,7 +71,7 @@ def clip_without_audio(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return out
 
 
-def _default_config(**overrides: float) -> MediaConfig:
+def _default_config(**overrides: Any) -> MediaConfig:
     base = dict(max_size_mb=2048.0, max_duration_seconds=14400.0, timeout_seconds=30.0)
     base.update(overrides)
     return MediaConfig(**base)
@@ -110,6 +110,165 @@ def test_loads_metadata_correctly_for_known_clip(clip_with_audio: Path) -> None:
         wav_path = handle.audio_wav()
         assert os.path.exists(wav_path)
         assert wav_path.endswith(".wav")
+
+
+def _counting_download_fn(source: Path) -> tuple[Callable[[str, str], str], list[str]]:
+    """Like _copying_download_fn, but records every URL it was actually
+    invoked for — the seam these caching tests need: proving a *second*
+    load() of the same URL never calls this at all."""
+    calls: list[str] = []
+
+    def _download(url: str, tmpdir: str) -> str:
+        calls.append(url)
+        dest = os.path.join(tmpdir, "source.mp4")
+        shutil.copyfile(source, dest)
+        return dest
+
+    return _download, calls
+
+
+def test_no_cache_dir_downloads_fresh_every_time(clip_with_audio: Path) -> None:
+    """Default (cache_dir=None) behavior must be unchanged: every load() call
+    re-downloads into a fresh temp dir, cache_dir opt-in or not."""
+    download_fn, calls = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    with loader.load(remote):
+        pass
+    with loader.load(remote):
+        pass
+
+    assert calls == ["https://example.com/v", "https://example.com/v"]
+
+
+def test_cache_dir_reuses_a_previous_download_for_the_same_url(clip_with_audio: Path, tmp_path: Path) -> None:
+    """DESIGN.md §21 Phase 6 follow-up: --keep-media alone only skipped
+    deletion of a one-off random temp dir, with no way to find it again on a
+    later run — this is the actual "don't re-download the same URL" fix."""
+    cache_dir = tmp_path / "cache"
+    download_fn, calls = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(cache_dir=str(cache_dir)), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    with loader.load(remote) as first:
+        first_wav = first.audio_wav()
+        assert os.path.exists(first_wav)
+
+    with loader.load(remote) as second:
+        assert os.path.exists(second.audio_wav())
+
+    assert calls == ["https://example.com/v"]  # second load() never re-downloaded
+
+
+def test_cache_dir_gives_different_urls_different_directories(clip_with_audio: Path, tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    download_fn, calls = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(cache_dir=str(cache_dir)), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+
+    with loader.load(RemoteMedia(url="https://example.com/a", direct_url="https://example.com/a")):
+        pass
+    with loader.load(RemoteMedia(url="https://example.com/b", direct_url="https://example.com/b")):
+        pass
+
+    assert calls == ["https://example.com/a", "https://example.com/b"]  # both downloaded — different URLs
+
+
+def test_cache_dir_survives_close(clip_with_audio: Path, tmp_path: Path) -> None:
+    """A cached download is meant to outlive the run that created it — close()
+    must not delete it, unlike the default ephemeral temp dir (contrast with
+    test_temp_files_removed_after_successful_run)."""
+    cache_dir = tmp_path / "cache"
+    download_fn, _ = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(cache_dir=str(cache_dir)), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    handle = loader.load(remote)
+    media_dir = os.path.dirname(handle.audio_wav())
+    handle.close()
+
+    assert os.path.exists(media_dir)
+    assert os.path.exists(os.path.join(media_dir, "source.mp4"))
+
+
+def test_cache_dir_ignores_a_leftover_partial_download(clip_with_audio: Path, tmp_path: Path) -> None:
+    """yt-dlp leaves a `.part` file behind on a failed/interrupted download;
+    a stale partial must never be mistaken for a completed, reusable one."""
+    cache_dir = tmp_path / "cache"
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    # Pre-seed the cache dir with just a partial artifact, as a previous
+    # failed run would leave behind — no _download call involved yet.
+    from dfl.media.loader import _cache_key
+
+    media_dir = cache_dir / _cache_key(remote.url)
+    media_dir.mkdir(parents=True)
+    (media_dir / "source.mp4.part").write_bytes(b"incomplete")
+
+    download_fn, calls = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(cache_dir=str(cache_dir)), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+
+    with loader.load(remote) as handle:
+        assert os.path.exists(handle.audio_wav())
+
+    assert calls == ["https://example.com/v"]  # the partial was not reused — a real download ran
+
+
+def test_cache_dir_ignores_a_truncated_download_with_no_part_suffix(clip_with_audio: Path, tmp_path: Path) -> None:
+    """Real bug found running the ok.ru example (Phase 6 follow-up): a
+    download whose timeout fires while yt-dlp's HLS downloader is mid-flight
+    leaves an orphaned background thread that keeps writing — since HLS
+    fragments write straight to the final filename (no `.part` staging), a
+    completion-suffix check alone can't tell a genuinely-finished file from
+    one an abandoned thread stopped mid-write. Only a completion marker
+    written *after* a full, guard-checked download can. A `source.*` file
+    with no marker next to it must be re-downloaded, not trusted."""
+    cache_dir = tmp_path / "cache"
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    from dfl.media.loader import _cache_key
+
+    media_dir = cache_dir / _cache_key(remote.url)
+    media_dir.mkdir(parents=True)
+    (media_dir / "source.mp4").write_bytes(b"truncated but no .part suffix")
+
+    download_fn, calls = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(cache_dir=str(cache_dir)), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+
+    with loader.load(remote) as handle:
+        assert os.path.exists(handle.audio_wav())
+
+    assert calls == ["https://example.com/v"]  # the truncated file was not reused
+
+
+def test_cache_dir_completion_marker_makes_a_real_download_reusable(clip_with_audio: Path, tmp_path: Path) -> None:
+    """The positive case for the same fix: a download that actually
+    completed through YtDlpMediaLoader (marker written) IS trusted next time."""
+    cache_dir = tmp_path / "cache"
+    download_fn, calls = _counting_download_fn(clip_with_audio)
+    loader = YtDlpMediaLoader(
+        config=_default_config(cache_dir=str(cache_dir)), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, download_fn=download_fn
+    )
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    with loader.load(remote):
+        pass
+    with loader.load(remote):
+        pass
+
+    assert calls == ["https://example.com/v"]
 
 
 def test_temp_files_removed_after_successful_run(clip_with_audio: Path) -> None:

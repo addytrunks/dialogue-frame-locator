@@ -20,7 +20,10 @@ from typing import Sequence
 from dfl.asr.base import AsrProvider, WordTimedTranscript
 from dfl.asr.chunking import AudioChunk, merge_transcripts
 from dfl.contracts import Candidate, MediaHandle
+from dfl.logging import get_stage_logger
 from dfl.match.matcher import PhraseMatcher
+
+_log = get_stage_logger("asr")
 
 
 @dataclass(frozen=True)
@@ -63,21 +66,33 @@ class AsrDetector:
 
     def locate(self, media: MediaHandle, query: str, opts: AsrDetectorOptions | None = None) -> list[Candidate]:
         chunks = list(media.iter_audio_chunks(self._chunk_seconds, self._chunk_overlap_seconds))
+        _log.info(
+            "splitting audio into %d chunk(s) (~%.1fs each, %.1fs overlap)",
+            len(chunks), self._chunk_seconds, self._chunk_overlap_seconds,
+        )
         transcripts: list[WordTimedTranscript] = []
         chunk_providers: list[str] = []
         self.last_chunk_providers = {}
-        for chunk in chunks:
-            transcripts.append(self._provider.transcribe(chunk))
+        for i, chunk in enumerate(chunks):
+            _log.info(
+                "transcribing chunk %d/%d [%.1fs-%.1fs]", i + 1, len(chunks), chunk.start_time, chunk.end_time
+            )
+            transcript = self._provider.transcribe(chunk)
+            transcripts.append(transcript)
             # FailoverAsrProvider tracks which concrete provider actually
             # served the call; a bare provider just reports its own name.
             provider = getattr(self._provider, "last_provider", None) or self._provider.name
             chunk_providers.append(provider)
             self.last_chunk_providers[chunk.index] = provider
+            _log.info(
+                "chunk %d/%d done via %s (%d word(s))", i + 1, len(chunks), provider, len(transcript.words)
+            )
 
         words = merge_transcripts(chunks, transcripts)
         language = next((t.language for t in transcripts if t.language and t.language != "unknown"), "unknown")
         transcript = WordTimedTranscript(words=words, language=language, provider=self.name)
 
+        _log.info("matching %r against %d transcribed word(s)", query, len(words))
         candidates = self._matcher.match(transcript, query)
         return [_attach_provider(c, chunks, chunk_providers) for c in candidates]
 

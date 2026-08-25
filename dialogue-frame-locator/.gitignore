@@ -20,3 +20,6 @@ tmp/
 !tests/fixtures/**
 tests/fixtures/**/__pycache__/
 tests/fixtures/**/*.pyc
+
+# opt-in media download cache (media.cache_dir, config/default.yaml)
+.cache/

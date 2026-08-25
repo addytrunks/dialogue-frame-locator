@@ -13,6 +13,7 @@ ffmpeg/PyAV) lives in tests/e2e/test_pipeline_e2e.py.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -344,6 +345,37 @@ def test_media_is_not_closed_when_keep_media_is_set(tmp_path: Path) -> None:
     _run(loader=loader, output_dir=str(tmp_path), keep_media=True)
 
     assert handle.closed is False
+
+
+def test_pipeline_logs_progress_through_each_stage(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """User-reported gap: a run against a real (slow) host showed no
+    progress output at all until it finished or errored. INFO-level,
+    stage-tagged progress logs (DESIGN.md §16.5: "INFO for progress") fix
+    that — this pins the stage-transition messages pipeline.py itself is
+    responsible for."""
+    caplog.set_level(logging.INFO, logger="dfl")
+    detector = _FakeDetector([_candidate(0.95, extra={"avg_word_confidence": 0.9})])
+
+    _run(detector=detector, output_dir=str(tmp_path))
+
+    text = caplog.text.lower()
+    assert "resolving" in text
+    assert "loading media" in text or "downloading" in text
+    assert "asr" in text  # detector name is logged
+    assert "extracting frame" in text
+
+
+def test_pipeline_logs_progress_up_to_the_not_found_result(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Progress logging must not depend on reaching FOUND — a NOT_FOUND run
+    still resolved and loaded media and ran the detector, and the user should
+    see that happened rather than silence followed by a bare result."""
+    caplog.set_level(logging.INFO, logger="dfl")
+
+    _run(detector=_FakeDetector([]), output_dir=str(tmp_path))
+
+    text = caplog.text.lower()
+    assert "resolving" in text
+    assert "asr" in text
 
 
 def test_match_threshold_override_can_demote_found_to_ambiguous(tmp_path: Path) -> None:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from dfl.config import Config, ConfigError, load_config
 
@@ -81,9 +83,12 @@ def test_alignment_model_settings_are_config_not_code(tmp_path: Path) -> None:
 
 
 def test_negative_max_shift_raises_config_error(tmp_path: Path) -> None:
-    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace(
-        "max_shift_seconds: 0.5", "max_shift_seconds: -0.5"
-    )
+    # A regex, not a literal-string .replace(): default.yaml's exact
+    # formatting (single-line vs. value-on-its-own-line under a long
+    # trailing comment) has changed under an external editor's reformatting
+    # before, silently no-opping a literal replace and letting this test
+    # pass against an unmodified, still-valid config.
+    text = re.sub(r"max_shift_seconds:\s*0\.5", "max_shift_seconds: -0.5", DEFAULT_CONFIG.read_text(encoding="utf-8"))
     bad = tmp_path / "bad_shift.yaml"
     bad.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError):
@@ -109,6 +114,31 @@ def test_snap_delta_wider_than_the_vad_window_pad_raises_config_error(tmp_path: 
 
 def test_vad_reject_ceiling_is_loaded(tmp_path: Path) -> None:
     assert load_config(DEFAULT_CONFIG).match.confidence.vad_reject_ceiling == 0.50
+
+
+def test_media_cache_dir_defaults_to_none_when_absent(tmp_path: Path) -> None:
+    """Caching is opt-in (§21 Phase 6 follow-up): a config that omits
+    media.cache_dir entirely must not be a ConfigError and must not silently
+    enable caching with a made-up path. (The shipped default.yaml now sets
+    it — see test_media_cache_dir_is_loaded_when_present — so this builds a
+    config without the key via the parsed dict rather than text-editing the
+    file, since cache_dir's multi-line trailing comment makes it a multi-line
+    block, not something a single regex/replace can safely strip.)"""
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    del raw["media"]["cache_dir"]
+    no_cache_dir = tmp_path / "no_cache_dir.yaml"
+    no_cache_dir.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    assert load_config(no_cache_dir).media.cache_dir is None
+
+
+def test_media_cache_dir_is_loaded_when_present(tmp_path: Path) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["media"]["cache_dir"] = "./.cache/media"
+    with_cache = tmp_path / "with_cache.yaml"
+    with_cache.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    assert load_config(with_cache).media.cache_dir == "./.cache/media"
 
 
 def test_vad_reject_ceiling_at_or_above_tau_c_raises_config_error(tmp_path: Path) -> None:

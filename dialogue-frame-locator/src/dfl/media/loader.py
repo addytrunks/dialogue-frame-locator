@@ -14,6 +14,7 @@ header, which lie on some containers.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -27,8 +28,24 @@ import yt_dlp
 
 from dfl.config import MediaConfig
 from dfl.contracts import Frame, MediaHandle
+from dfl.logging import get_stage_logger
 from dfl.media.errors import ErrorCode, MediaError
 from dfl.media.resolver import RemoteMedia, _chrome_impersonate_target
+
+_log = get_stage_logger("ingest")
+
+# Suffixes yt-dlp uses for a download in progress / not yet finalized. A file
+# ending in one of these is never a completed download, cached or not — see
+# _existing_download.
+_INCOMPLETE_SUFFIXES = (".part", ".ytdl")
+
+# Written only after a full download + guard checks succeed (§21 Phase 6
+# follow-up). Required before a cached source.* file is trusted: HLS
+# downloads (confirmed against the real ok.ru example) write fragments
+# straight to the final filename with no .part staging, so a download whose
+# timeout fired mid-flight can leave a same-named, truncated file behind —
+# the suffix check alone can't tell that apart from a real completed one.
+_COMPLETE_MARKER = ".dfl_download_complete"
 
 # (url, tmpdir) -> path to the downloaded file inside tmpdir. Real
 # implementation is _yt_dlp_download; tests inject a fake to avoid network
@@ -47,16 +64,22 @@ class MediaLoader(Protocol):
 class LoadedMedia:
     """Concrete MediaHandle for a downloaded, probed local media file.
 
-    Owns the temp directory holding the raw media file and extracted WAV.
-    Use as a context manager (or call close()) to remove it — the temp
-    dir is honored on both success and failure (DESIGN.md §12.2).
+    Owns the directory holding the raw media file and extracted WAV. Use as a
+    context manager (or call close()) to remove it — honored on both success
+    and failure (DESIGN.md §12.2). ``persistent=True`` (set when
+    ``media.cache_dir`` is configured, §21 Phase 6 follow-up) means this
+    directory is a reusable cache keyed by URL, not a one-shot temp dir, so
+    close() leaves it on disk for the next run to find instead of deleting it.
     """
 
-    def __init__(self, tmpdir: str, raw_path: str, wav_path: str, metadata: dict[str, Any]):
+    def __init__(
+        self, tmpdir: str, raw_path: str, wav_path: str, metadata: dict[str, Any], persistent: bool = False
+    ):
         self._tmpdir = tmpdir
         self._raw_path = raw_path
         self._wav_path = wav_path
         self._metadata = metadata
+        self._persistent = persistent
         self._closed = False
 
     def local_path(self) -> str:
@@ -94,7 +117,8 @@ class LoadedMedia:
     def close(self) -> None:
         if self._closed:
             return
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if not self._persistent:
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
         self._closed = True
 
     def __enter__(self) -> "LoadedMedia":
@@ -134,21 +158,42 @@ class YtDlpMediaLoader:
                 f"media.max_duration_seconds={self._config.max_duration_seconds}",
             )
 
-        tmpdir = tempfile.mkdtemp(prefix="dfl_media_")
+        persistent = bool(self._config.cache_dir)
+        if persistent:
+            assert self._config.cache_dir is not None
+            media_dir = os.path.join(self._config.cache_dir, _cache_key(remote_media.url))
+            os.makedirs(media_dir, exist_ok=True)
+        else:
+            media_dir = tempfile.mkdtemp(prefix="dfl_media_")
+
         try:
-            raw_path = self._download(remote_media, tmpdir)
+            raw_path = _existing_download(media_dir) if persistent else None
+            if raw_path is not None:
+                _log.info("reusing cached download for %s: %s", remote_media.url, raw_path)
+            else:
+                if persistent:
+                    # Drop any stale artifact from an interrupted prior
+                    # attempt (e.g. a truncated file an abandoned timeout
+                    # thread was still writing, §21 Phase 6 follow-up) before
+                    # downloading fresh into the same cache directory.
+                    _clear_directory(media_dir)
+                raw_path = self._download(remote_media, media_dir)
+                if persistent:
+                    open(os.path.join(media_dir, _COMPLETE_MARKER), "w").close()
             metadata = self._probe(raw_path)
             if not metadata["has_audio"]:
                 raise MediaError(ErrorCode.NO_AUDIO, f"no audio stream found in {remote_media.url!r}")
-            wav_path = self._extract_audio(raw_path, tmpdir)
+            wav_path = self._extract_audio(raw_path, media_dir)
         except MediaError:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            if not persistent:
+                shutil.rmtree(media_dir, ignore_errors=True)
             raise
         except Exception as exc:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            if not persistent:
+                shutil.rmtree(media_dir, ignore_errors=True)
             raise MediaError(ErrorCode.DOWNLOAD_FAILED, f"unexpected failure loading media: {exc}") from exc
 
-        return LoadedMedia(tmpdir=tmpdir, raw_path=raw_path, wav_path=wav_path, metadata=metadata)
+        return LoadedMedia(tmpdir=media_dir, raw_path=raw_path, wav_path=wav_path, metadata=metadata, persistent=persistent)
 
     def _download(self, remote_media: RemoteMedia, tmpdir: str) -> str:
         pool = ThreadPoolExecutor(max_workers=1)
@@ -228,6 +273,53 @@ class YtDlpMediaLoader:
             )
 
         return wav_path
+
+
+def _cache_key(url: str) -> str:
+    """Stable, filesystem-safe directory name for a URL's cache (§21 Phase 6 follow-up)."""
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+
+
+def _existing_download(media_dir: str) -> str | None:
+    """A previously-downloaded ``source.*`` file in ``media_dir``, if a complete
+    one is there — or None, so the caller falls through to a real download.
+
+    Requires ``_COMPLETE_MARKER`` (written only after a full download
+    succeeded, never after an abandoned/timed-out attempt) before trusting
+    anything in the directory at all — see that constant's docstring for why
+    a suffix check alone isn't enough. Also filters out yt-dlp's own
+    in-progress markers (``.part``, ``.ytdl``) as a second layer.
+    """
+    if not os.path.isfile(os.path.join(media_dir, _COMPLETE_MARKER)):
+        return None
+    for name in sorted(os.listdir(media_dir)):
+        if not name.startswith("source."):
+            continue
+        if name.endswith(_INCOMPLETE_SUFFIXES):
+            continue
+        path = os.path.join(media_dir, name)
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+    return None
+
+
+def _clear_directory(media_dir: str) -> None:
+    """Remove every file in ``media_dir`` without removing the directory itself.
+
+    Used before a fresh download into a persistent cache dir that turned out
+    not to hold a complete one — clears any stale/truncated artifact from an
+    interrupted prior attempt so it can't interfere with (or be confused
+    for) the new download.
+    """
+    for name in os.listdir(media_dir):
+        path = os.path.join(media_dir, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def _yt_dlp_download(url: str, tmpdir: str) -> str:

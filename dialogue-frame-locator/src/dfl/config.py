@@ -151,6 +151,12 @@ class MediaConfig:
     max_size_mb: float
     max_duration_seconds: float
     timeout_seconds: float
+    # Opt-in (§21 Phase 6 follow-up): when set, downloads are cached under
+    # cache_dir/<sha256(url)> and reused on a later run for the same URL
+    # instead of re-downloading. None (the default.yaml default) preserves
+    # the original one-shot-temp-dir behavior — no repo-relative cache
+    # appears unless a config explicitly opts in.
+    cache_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -401,10 +407,14 @@ def _parse(raw: Any) -> Config:
     refine = RefineConfig(vad=vad, snap=snap, alignment=alignment)
 
     media_raw = _require_type(raw, "media", "", dict)
+    cache_dir_raw = media_raw.get("cache_dir")
+    if cache_dir_raw is not None and not isinstance(cache_dir_raw, str):
+        raise ConfigError(f"config key 'media.cache_dir' must be a string or omitted, got {type(cache_dir_raw).__name__}")
     media = MediaConfig(
         max_size_mb=float(_require_type(media_raw, "max_size_mb", "media", (int, float))),
         max_duration_seconds=float(_require_type(media_raw, "max_duration_seconds", "media", (int, float))),
         timeout_seconds=float(_require_type(media_raw, "timeout_seconds", "media", (int, float))),
+        cache_dir=cache_dir_raw,
     )
     if media.max_size_mb <= 0 or media.max_duration_seconds <= 0 or media.timeout_seconds <= 0:
         raise ConfigError("media limits (max_size_mb, max_duration_seconds, timeout_seconds) must be > 0")

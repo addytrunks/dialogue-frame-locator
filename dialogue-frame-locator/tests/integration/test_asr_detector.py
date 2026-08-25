@@ -13,6 +13,7 @@ unchanged, but now genuinely exercise the cascade.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -161,6 +162,26 @@ def test_last_chunk_providers_is_recorded_even_with_no_match() -> None:
 
     assert candidates == []
     assert detector.last_chunk_providers == {0: "scripted", 1: "scripted"}
+
+
+def test_locate_logs_chunking_and_per_chunk_progress(caplog: pytest.LogCaptureFixture) -> None:
+    """User-reported gap: a long real run showed no output while ASR chunks
+    were being transcribed, the actual slow part of a run. Per-chunk INFO
+    logs (DESIGN.md §16.5) fix that."""
+    caplog.set_level(logging.INFO, logger="dfl")
+    chunk0 = AudioChunk(index=0, start_time=0.0, end_time=5.0, wav_bytes=b"")
+    chunk1 = AudioChunk(index=1, start_time=3.5, end_time=8.5, wav_bytes=b"")
+    empty = WordTimedTranscript(words=[], language="en", provider="scripted")
+    provider = _ScriptedProvider({0: empty, 1: empty})
+    detector = AsrDetector(provider=provider, matcher=_matcher(), chunk_seconds=5.0, chunk_overlap_seconds=1.5)
+    media = _FakeMediaHandle([chunk0, chunk1])
+
+    detector.locate(media, "nothing to find")
+
+    text = caplog.text
+    assert "2 chunk" in text
+    assert "chunk 1/2" in text
+    assert "chunk 2/2" in text
 
 
 def test_locate_uses_the_real_cascade_not_just_exact_match() -> None:
