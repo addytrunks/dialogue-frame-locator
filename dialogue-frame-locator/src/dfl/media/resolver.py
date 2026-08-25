@@ -8,7 +8,7 @@ without per-site code).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -37,25 +37,39 @@ class MediaResolver(Protocol):
 
 
 class YtDlpMediaResolver:
-    """MediaResolver backed by yt-dlp (DESIGN.md §12.2)."""
+    """MediaResolver backed by yt-dlp (DESIGN.md §12.2).
+
+    Some sites (confirmed: ok.ru) reject yt-dlp's plain request handler
+    with a connection reset, but succeed once yt-dlp impersonates a real
+    browser's TLS/HTTP fingerprint via curl_cffi. To avoid paying that
+    cost on every call (and to keep curl_cffi an optional dependency —
+    yt-dlp itself raises immediately if impersonation is requested but
+    unavailable), resolve() tries a plain request first and only retries
+    once with Chrome impersonation if that fails.
+    """
 
     name = "yt_dlp"
 
     def resolve(self, url: str) -> RemoteMedia:
         _validate_url(url)
 
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "skip_download": True,
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except yt_dlp.utils.DownloadError as exc:
-            raise MediaError(ErrorCode.URL_UNRESOLVABLE, f"yt-dlp could not resolve {url!r}: {exc}") from exc
+        info: dict[str, Any] | None = None
+        last_error: Exception | None = None
+        for impersonate in (False, True):
+            try:
+                info = self._extract_info(url, impersonate=impersonate)
+            except yt_dlp.utils.YoutubeDLError as exc:
+                last_error = exc
+                info = None
+                continue
+            last_error = None
+            if info is not None:
+                break
 
+        if last_error is not None:
+            raise MediaError(
+                ErrorCode.URL_UNRESOLVABLE, f"yt-dlp could not resolve {url!r}: {last_error}"
+            ) from last_error
         if info is None:
             raise MediaError(ErrorCode.URL_UNRESOLVABLE, f"yt-dlp returned no info for {url!r}")
 
@@ -73,6 +87,24 @@ class YtDlpMediaResolver:
             title=info.get("title"),
             duration_seconds=float(duration) if duration is not None else None,
         )
+
+    def _extract_info(self, url: str, impersonate: bool) -> dict[str, Any] | None:
+        ydl_opts: dict[str, Any] = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+        }
+        if impersonate:
+            ydl_opts["impersonate"] = _chrome_impersonate_target()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+
+def _chrome_impersonate_target() -> Any:
+    from yt_dlp.networking.impersonate import ImpersonateTarget
+
+    return ImpersonateTarget.from_str("chrome")
 
 
 def _validate_url(url: str) -> None:

@@ -6,6 +6,9 @@ requires-python = ">=3.10"
 dependencies = [
     "PyYAML==6.0.3",
     "yt-dlp==2026.8.19",
+    "curl_cffi==0.16.1",  # optional at runtime (resolver falls back gracefully without it),
+                          # but required to resolve sites like ok.ru that reject yt-dlp's
+                          # plain request handler and only work with browser impersonation
 ]
 
 [project.optional-dependencies]

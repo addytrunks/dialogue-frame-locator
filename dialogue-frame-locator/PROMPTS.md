@@ -64,3 +64,22 @@ VALIDATION:
 - Size and timeout guards actually fire against a fixture engineered to exceed them.
 - Temp files are gone after both a successful and a failing run.
 - Report the manual ok.ru resolution result in your summary.
+
+ Ok, i believe the reason why the manual ok.ru fails might be because curl_cffi isn't available. So i ran the code in test.py and i got this following output C:\quest1>python test.py
+  [debug] Encodings: locale cp1252, fs utf-8, pref cp1252, out utf-8, error utf-8, screen utf-8
+  [debug] yt-dlp version stable@2026.08.19 from yt-dlp/yt-dlp [594bd50c2] (pip) API
+  [debug] params: {'verbose': True, 'impersonate': 'chrome', 'outtmpl': 'test_video.%(ext)s', 'js_runtimes': {'deno': {}}, 'remote_components': set(), 'compat_opts': set(), 'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,/;q=0.8', 'Accept-Language': 'en-us,en;q=0.5', 'Sec-Fetch-Mode': 'navigate'}}
+  [debug] Python 3.14.2 (CPython AMD64 64bit) - Windows-11-10.0.26200-SP0 (OpenSSL 3.0.18 30 Sep 2025)
+  [debug] exe versions: none
+  [debug] Optional libraries: certifi-2026.02.25, requests-2.32.5, sqlite3-3.50.4, urllib3-2.6.3
+  [debug] JS runtimes: none
+  [debug] Proxy map: {}
+  [debug] Request Handlers: urllib, requests
+  [debug] Plugin directories: none
+
+  === FAILED ===
+  YoutubeDLError
+  Impersonate target "chrome" is not available. Use --list-impersonate-targets to see available targets. You may be missing dependencies
+  required to support this target.
+
+  Could you please resolve that? You can browse the internet or use the context7 MCP for further clarifications. Once that's done, manually run the resolver on that site.
