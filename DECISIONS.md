@@ -58,3 +58,4 @@ PHASE 5 (I believe this has been over-engineered)
 Implementation of temporal refinement. The goal is to get hold of much more precise timestamps by the following steps:
       silero for voice-activity-detecion (vad) -> strip away silence regions
       Dynamic Time Warping (DTW) for forced-alignment (tells you exactly where these words occur in the audio), did not use a proper FAS as they pose computational cost.
+      vad snap = ensures that the onset time isn't ahead of the actual onset. eg: if vad says speech started around 10s, but the target is around 10.5, then t* should be 10.5 and not 10
