@@ -35,7 +35,7 @@ VALIDATION (must pass before you call this phase done):
 - Write a unit test that defines a dummy OcrDetector implementing the Detector protocol and asserts it satisfies the interface — this proves the seam works before OCR exists (§17.2).
 - Config loader rejects a malformed config/default.yaml in a test.
  Can you give me a worflow of this project? Using the folders (asr,detect,localize etc) that you've created?
-
+ Could you give me your justifications for choosing the values in default.yaml?
 ---
 
 ## Phase 1 — Media Ingestion
