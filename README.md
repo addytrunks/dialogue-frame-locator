@@ -48,10 +48,6 @@ pip install -e ".[dev]"
 ```bash
 echo "OPENROUTER_API_KEY=sk-or-..." > dialogue-frame-locator/.env
 ```
-
-- No key? The pipeline still runs end-to-end on the local `faster-whisper` fallback — set `asr.provider: local` in a config copy, or pass `--config`.
-- **First run only:** the local ASR fallback and the forced-alignment step each download their model weights on first use (network + one-time delay) — not at install time.
-
 ---
 
 ## 2. Run
