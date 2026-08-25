@@ -145,7 +145,7 @@ class YtDlpMediaLoader:
         self._config = config
         self._ffprobe_path = ffprobe_path
         self._ffmpeg_path = ffmpeg_path
-        self._download_fn = download_fn or _yt_dlp_download
+        self._download_fn = download_fn or _make_yt_dlp_download(config.max_video_height)
 
     def load(self, remote_media: RemoteMedia) -> MediaHandle:
         if (
@@ -322,48 +322,75 @@ def _clear_directory(media_dir: str) -> None:
                 pass
 
 
-def _yt_dlp_download(url: str, tmpdir: str) -> str:
-    """Real download_fn: downloads url via yt-dlp (§12.2 — to a temp file, not
-    streaming).
+def _format_spec(max_video_height: int | None) -> str:
+    """yt-dlp format selector, honoring an optional resolution cap (§21 Phase 6 follow-up).
 
-    Some sites (confirmed: ok.ru, via a real manual run during Phase 6) reset
-    the connection on yt-dlp's plain request handler for the actual media
-    download, not only for resolver.py's metadata resolution — so this
-    retries once with Chrome impersonation before giving up, mirroring
-    ``YtDlpMediaResolver.resolve()``'s identical plain-then-impersonate
-    pattern (§12.2).
+    ASR only needs audio and frame extraction only needs one readable still,
+    so an unbounded "best" download (which can mean 4K) wastes bandwidth and
+    time for no benefit here. Capping height cuts both roughly proportionally
+    with no accuracy cost. The bounded selector's shape — separate video/audio
+    caps with a combined fallback — matches what was confirmed working
+    against a real video during manual testing.
     """
-    outtmpl = os.path.join(tmpdir, "source.%(ext)s")
-    last_error: Exception | None = None
-    for impersonate in (False, True):
-        ydl_opts: dict[str, Any] = {
-            "outtmpl": outtmpl,
-            "quiet": True,
-            "no_warnings": True,
-            "noprogress": True,
-            "noplaylist": True,
-            "retries": 3,
-            "format": "bv*+ba/b",
-            "merge_output_format": "mp4",
-        }
-        if impersonate:
-            ydl_opts["impersonate"] = _chrome_impersonate_target()
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            last_error = None
-            break
-        except yt_dlp.utils.YoutubeDLError as exc:
-            last_error = exc
-            continue
+    if not max_video_height:
+        return "bv*+ba/b"
+    return f"bestvideo[height<={max_video_height}]+bestaudio/best[height<={max_video_height}]/best"
 
-    if last_error is not None:
-        raise MediaError(ErrorCode.DOWNLOAD_FAILED, f"yt-dlp download failed for {url!r}: {last_error}") from last_error
 
-    candidates = [name for name in os.listdir(tmpdir) if name.startswith("source.")]
-    if not candidates:
-        raise MediaError(ErrorCode.DOWNLOAD_FAILED, f"yt-dlp reported success but produced no output for {url!r}")
-    return os.path.join(tmpdir, candidates[0])
+def _make_yt_dlp_download(max_video_height: int | None) -> DownloadFn:
+    """Build the real download_fn, closing over the configured resolution cap.
+
+    A factory rather than a single module-level function because the format
+    selector depends on ``media.max_video_height``/``--max-video-height``,
+    which ``YtDlpMediaLoader`` only learns at construction time.
+    """
+    format_spec = _format_spec(max_video_height)
+
+    def _download(url: str, tmpdir: str) -> str:
+        """Downloads url via yt-dlp (§12.2 — to a temp file, not streaming).
+
+        Some sites (confirmed: ok.ru, via a real manual run during Phase 6)
+        reset the connection on yt-dlp's plain request handler for the
+        actual media download, not only for resolver.py's metadata
+        resolution — so this retries once with Chrome impersonation before
+        giving up, mirroring ``YtDlpMediaResolver.resolve()``'s identical
+        plain-then-impersonate pattern (§12.2).
+        """
+        outtmpl = os.path.join(tmpdir, "source.%(ext)s")
+        last_error: Exception | None = None
+        for impersonate in (False, True):
+            ydl_opts: dict[str, Any] = {
+                "outtmpl": outtmpl,
+                "quiet": True,
+                "no_warnings": True,
+                "noprogress": True,
+                "noplaylist": True,
+                "retries": 3,
+                "format": format_spec,
+                "merge_output_format": "mp4",
+            }
+            if impersonate:
+                ydl_opts["impersonate"] = _chrome_impersonate_target()
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                last_error = None
+                break
+            except yt_dlp.utils.YoutubeDLError as exc:
+                last_error = exc
+                continue
+
+        if last_error is not None:
+            raise MediaError(
+                ErrorCode.DOWNLOAD_FAILED, f"yt-dlp download failed for {url!r}: {last_error}"
+            ) from last_error
+
+        candidates = [name for name in os.listdir(tmpdir) if name.startswith("source.")]
+        if not candidates:
+            raise MediaError(ErrorCode.DOWNLOAD_FAILED, f"yt-dlp reported success but produced no output for {url!r}")
+        return os.path.join(tmpdir, candidates[0])
+
+    return _download
 
 
 def _parse_probe(probe: dict[str, Any]) -> dict[str, Any]:

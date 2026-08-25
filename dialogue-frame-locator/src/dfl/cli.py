@@ -79,6 +79,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to a config YAML (default: config/default.yaml next to the package).",
     )
+    parser.add_argument(
+        "--max-video-height",
+        type=int,
+        default=None,
+        dest="max_video_height",
+        help=(
+            "Override media.max_video_height from config: cap downloaded video "
+            "resolution to at most this height in pixels (e.g. 480, 720). "
+            "0 means uncapped."
+        ),
+    )
     return parser
 
 
@@ -139,8 +150,14 @@ def _run(args: argparse.Namespace) -> Result:
     language = args.language or config.language.default
     out_dir = args.out or config.output.dir
 
+    media_config = config.media
+    if args.max_video_height is not None:
+        # 0 is the "uncapped" sentinel (matches config.py's own normalization
+        # of media.max_video_height: 0 in YAML).
+        media_config = dataclasses.replace(media_config, max_video_height=args.max_video_height or None)
+
     resolver = YtDlpMediaResolver()
-    loader = YtDlpMediaLoader(config.media)
+    loader = YtDlpMediaLoader(media_config)
     asr_provider = _build_asr_provider(config, language)
     matcher = _build_matcher(config)
     detector = AsrDetector(

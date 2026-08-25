@@ -125,7 +125,7 @@ def test_media_cache_dir_defaults_to_none_when_absent(tmp_path: Path) -> None:
     file, since cache_dir's multi-line trailing comment makes it a multi-line
     block, not something a single regex/replace can safely strip.)"""
     raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
-    del raw["media"]["cache_dir"]
+    raw["media"].pop("cache_dir", None)  # tolerate default.yaml setting or omitting it either way
     no_cache_dir = tmp_path / "no_cache_dir.yaml"
     no_cache_dir.write_text(yaml.safe_dump(raw), encoding="utf-8")
 
@@ -139,6 +139,43 @@ def test_media_cache_dir_is_loaded_when_present(tmp_path: Path) -> None:
     with_cache.write_text(yaml.safe_dump(raw), encoding="utf-8")
 
     assert load_config(with_cache).media.cache_dir == "./.cache/media"
+
+
+def test_media_max_video_height_default_config_caps_at_720(tmp_path: Path) -> None:
+    """DESIGN.md §21 Phase 6 follow-up: ASR only needs audio and frame
+    extraction only needs one readable still, so an unbounded "best" download
+    wastes bandwidth/time. 720p is the shipped default."""
+    assert load_config(DEFAULT_CONFIG).media.max_video_height == 720
+
+
+def test_media_max_video_height_absent_means_uncapped(tmp_path: Path) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["media"].pop("max_video_height", None)
+    no_cap = tmp_path / "no_cap.yaml"
+    no_cap.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    assert load_config(no_cap).media.max_video_height is None
+
+
+def test_media_max_video_height_zero_means_uncapped(tmp_path: Path) -> None:
+    """0 is the CLI's "no cap" sentinel (--max-video-height 0); config.py
+    normalizes it the same way so the two stay consistent."""
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["media"]["max_video_height"] = 0
+    zero_cap = tmp_path / "zero_cap.yaml"
+    zero_cap.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    assert load_config(zero_cap).media.max_video_height is None
+
+
+def test_media_max_video_height_negative_raises_config_error(tmp_path: Path) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["media"]["max_video_height"] = -1
+    bad = tmp_path / "bad_height.yaml"
+    bad.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        load_config(bad)
 
 
 def test_vad_reject_ceiling_at_or_above_tau_c_raises_config_error(tmp_path: Path) -> None:

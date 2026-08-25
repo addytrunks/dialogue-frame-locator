@@ -119,12 +119,17 @@ media:
   max_size_mb: 2048
   max_duration_seconds: 14400
   timeout_seconds: 300
-  cache_dir:
-    ./.cache/media # opt-in: reuse a previous download for the
-    # same URL instead of re-fetching it (useful
-    # for iterating against a slow/rate-limited
-    # host during development). Off by default —
-    # uncomment or set via --config to enable.
+  # cache_dir:
+  #   ./.cache/media # opt-in: reuse a previous download for the
+  # same URL instead of re-fetching it (useful
+  # for iterating against a slow/rate-limited
+  # host during development). Off by default —
+  # uncomment or set via --config to enable.
+  # Cap downloaded video resolution in pixels; 0 or omitted means uncapped.
+  # ASR only needs audio and frame extraction only needs one readable still,
+  # so an unbounded "best" download wastes bandwidth/time for no accuracy
+  # benefit. Override per run with --max-video-height.
+  max_video_height: 720
 
 output:
   dir: ./out

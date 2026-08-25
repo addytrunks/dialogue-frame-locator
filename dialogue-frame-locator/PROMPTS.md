@@ -246,3 +246,32 @@ Ok, i am facing a problem now, when i run the cli on the ok.ru video, it's takin
 implement early-stop now, 
 just let it run in the background
 lower-quality video format.
+Ok, it looks like it's taking too long to run the cli, i am guessing the problem must be with the ok.ru website. We will come back to it later.
+
+Regarding the ok.ru, i checked running test.py, it is getting downloaded, the problem is it's taking too long as you can see,
+  [Odnoklassniki] Extracting URL: https://ok.ru/video/248244667877
+  [Odnoklassniki] 248244667877: Downloading desktop webpage
+  [Odnoklassniki] 248244667877: Downloading m3u8 information
+  [info] 248244667877: Downloading 1 format(s): hls-1222
+  [hlsnative] Downloading m3u8 manifest
+  [hlsnative] Total fragments: 327
+  [download] Destination: okru_video.mp4
+  [download]   1.8% of ~ 467.88MiB at  278.51KiB/s ETA 38:40 (frag 6/327)
+One check before you commit to that fix: look at what yt-dlp's progress output is actually reporting — a low MB/s (server/network-bound) vs. a normal rate against a huge file (resolution-bound). If it's the former, capping quality helps but won't fully solve it; if it's the latter, capping quality fixes it directly.
+
+Bigger issue underneath the one you asked about: neither "wait" nor "lower quality" solves your real problem, which isn't this one download — it's that Phase 6 is your first real integration, so you should expect several buggy iterations, and a 40-minute (or even 10-minute) round trip per iteration is brutal. Two things already in your own design solve that, and neither is early-stop:
+
+--keep-media is already in your CLI contract (§4.3) — use it on this run, and go check whether media/loader.py from Phase 1 actually skips re-downloading when a cached file for this URL exists, or just skips deleting the temp file afterward. If it's the latter, add a "reuse existing local copy" check now. That's squarely Phase 1's territory, not new architecture, and it's the thing that actually kills repeated waits, not a lower-res format.
+Decouple audio from video for debugging. Most of your remaining bugs are going to be in matching/refinement/pipeline-wiring, none of which need the video stream at all. Pull audio-only for fast iteration; only fetch full video when you specifically need to check the extracted frame.
+
+So: cap the format, confirm keep_media is actually caching rather than just not-deleting, let today's download run once in the background while you fix that — and leave early-stop alone until you're back in Phase 3 territory, where it's actually the right tool for a different problem (long-media ASR cost, not download time).
+Ok, i noticed that YT downloads are pretty fast, and ok.ru is slow because of the throttling. This seems like just a ok.ru problem.But what if there's another video which poses the same problem? I can't keep caching it right? And also for now, i want you to test with this URL https://youtu.be/fNfpel0c2J8?si=COnmMZuWcExz9efy, query="I have made a blunder"
+let me put a stop on downloading the videos. I want you to tell me how to run the CLI/ program, i want to test on shorter YT videos first and then move on to larger ones.
+I have a few questions,what was the problem that we've been facing so far and when i run the CLI will i be able to see logs?
+C:\quest1\dialogue-frame-locator>uv run python -m dfl.cli --url https://www.youtube.com/watch?v=tWf4nB36poc --dialogue "you parcel this one" --out ./out
+  ERROR: You have requested merging of multiple formats but ffmpeg is not installed. Aborting due to --abort-on-error
+  ERROR: You have requested merging of multiple formats but ffmpeg is not installed. Aborting due to --abort-on-error
+  Status    : PROCESSING_ERROR
+  Error     : [DOWNLOAD_FAILED] yt-dlp download failed for 'https://www.youtube.com/watch?v=tWf4nB36poc': ERROR: You have requested merging of multiple formats but ffmpeg is not installed. Aborting due to --abort-on-error
+I would like to see logs in between the steps while running the CLI please, because I am not seeing anything right now. It's just a 5 minute YT video that I've uploaded.
+ I noticed that the downloading part takes time from your code, but when I did it from test.py, this is for the same YT video that I am talking about.

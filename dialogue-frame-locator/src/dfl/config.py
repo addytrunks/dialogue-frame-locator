@@ -157,6 +157,11 @@ class MediaConfig:
     # the original one-shot-temp-dir behavior — no repo-relative cache
     # appears unless a config explicitly opts in.
     cache_dir: str | None = None
+    # Caps downloaded video resolution in pixels (§21 Phase 6 follow-up).
+    # ASR only needs audio and frame extraction only needs one readable
+    # still, so an unbounded "best" download wastes bandwidth/time for no
+    # accuracy benefit. None (or 0) means uncapped.
+    max_video_height: int | None = None
 
 
 @dataclass(frozen=True)
@@ -410,11 +415,21 @@ def _parse(raw: Any) -> Config:
     cache_dir_raw = media_raw.get("cache_dir")
     if cache_dir_raw is not None and not isinstance(cache_dir_raw, str):
         raise ConfigError(f"config key 'media.cache_dir' must be a string or omitted, got {type(cache_dir_raw).__name__}")
+    max_video_height_raw = media_raw.get("max_video_height")
+    if max_video_height_raw is not None:
+        if not isinstance(max_video_height_raw, int):
+            raise ConfigError(
+                f"config key 'media.max_video_height' must be an integer or omitted, "
+                f"got {type(max_video_height_raw).__name__}"
+            )
+        if max_video_height_raw < 0:
+            raise ConfigError("media.max_video_height must be >= 0 (0 means uncapped)")
     media = MediaConfig(
         max_size_mb=float(_require_type(media_raw, "max_size_mb", "media", (int, float))),
         max_duration_seconds=float(_require_type(media_raw, "max_duration_seconds", "media", (int, float))),
         timeout_seconds=float(_require_type(media_raw, "timeout_seconds", "media", (int, float))),
         cache_dir=cache_dir_raw,
+        max_video_height=max_video_height_raw or None,
     )
     if media.max_size_mb <= 0 or media.max_duration_seconds <= 0 or media.timeout_seconds <= 0:
         raise ConfigError("media limits (max_size_mb, max_duration_seconds, timeout_seconds) must be > 0")

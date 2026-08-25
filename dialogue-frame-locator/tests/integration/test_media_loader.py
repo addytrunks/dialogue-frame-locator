@@ -20,7 +20,7 @@ import pytest
 import dfl.media.loader as loader_module
 from dfl.config import MediaConfig
 from dfl.media.errors import ErrorCode, MediaError
-from dfl.media.loader import YtDlpMediaLoader, _yt_dlp_download
+from dfl.media.loader import YtDlpMediaLoader, _make_yt_dlp_download
 from dfl.media.resolver import RemoteMedia
 
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -464,7 +464,7 @@ def _install_fake_yt_dlp(
 def test_yt_dlp_download_succeeds_on_first_plain_attempt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = _install_fake_yt_dlp(monkeypatch, responses=[None])
 
-    result = _yt_dlp_download("https://example.com/v", str(tmp_path))
+    result = _make_yt_dlp_download(None)("https://example.com/v", str(tmp_path))
 
     assert os.path.exists(result)
     assert len(calls) == 1
@@ -483,7 +483,7 @@ def test_yt_dlp_download_retries_with_impersonation_when_plain_request_fails(
         monkeypatch, responses=[_FakeDownloadError("[WinError 10054] connection reset"), None]
     )
 
-    result = _yt_dlp_download("https://ok.ru/video/248244667877", str(tmp_path))
+    result = _make_yt_dlp_download(None)("https://ok.ru/video/248244667877", str(tmp_path))
 
     assert os.path.exists(result)
     assert len(calls) == 2
@@ -501,9 +501,45 @@ def test_yt_dlp_download_fails_when_both_attempts_fail(monkeypatch: pytest.Monke
     )
 
     with pytest.raises(MediaError) as excinfo:
-        _yt_dlp_download("https://example.com/v", str(tmp_path))
+        _make_yt_dlp_download(None)("https://example.com/v", str(tmp_path))
     assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
     assert len(calls) == 2
+
+
+def test_yt_dlp_download_format_is_unbounded_when_no_height_cap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = _install_fake_yt_dlp(monkeypatch, responses=[None])
+
+    _make_yt_dlp_download(None)("https://example.com/v", str(tmp_path))
+
+    assert calls[0]["format"] == "bv*+ba/b"
+
+
+def test_yt_dlp_download_format_caps_to_the_configured_height(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """§21 Phase 6 follow-up: capping resolution cuts download size/time
+    proportionally with no accuracy cost — ASR only needs audio, frame
+    extraction only needs one readable still. Selector shape matches the
+    known-working one used in manual testing during development."""
+    calls = _install_fake_yt_dlp(monkeypatch, responses=[None])
+
+    _make_yt_dlp_download(480)("https://example.com/v", str(tmp_path))
+
+    assert calls[0]["format"] == "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+
+
+def test_loader_wires_the_configured_height_cap_into_the_default_download_fn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The cap must actually reach the real download function YtDlpMediaLoader
+    builds when no download_fn is injected, not just be plumbed as far as
+    MediaConfig."""
+    calls = _install_fake_yt_dlp(monkeypatch, responses=[None])
+    loader = YtDlpMediaLoader(config=_default_config(max_video_height=480), ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE)
+    remote = RemoteMedia(url="https://example.com/v", direct_url="https://example.com/v")
+
+    with pytest.raises(MediaError):  # the fake .download() writes a non-media file; probing it fails
+        loader.load(remote)
+
+    assert calls[0]["format"] == "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
 
 
 def _dfl_tmpdirs() -> list[str]:
