@@ -17,3 +17,4 @@ Before making the changes to the DESIGN.md, how would you go about tackling thos
 Ok, i've confirmed that i have access to whisper v3, 1 both provide access to word-level timestamps, and yes i agree with you on the other points as well.Now you can go ahead with the modification of design.md
 Ok, noted. before that, I want you to save this chat/important context into the project memory, i am going to start a new chat, as the implementation's gonna start.
 In the previous chat, you asked me if i would like the actual per-phase prompts for Claude Code. I would love that, please. I would be making changes to it if required.
+What model and effort should I use for each phase? I want to use my tokens effectively.
