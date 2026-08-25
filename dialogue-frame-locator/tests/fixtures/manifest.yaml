@@ -1,0 +1,161 @@
+# Mini-benchmark manifest (DESIGN.md §15.2, §21 Phase 7).
+#
+# Read by scripts/run_benchmark.py. Each entry is one CLI run to score.
+#
+# kind: synthetic | real
+#   synthetic — built on demand by scripts/run_benchmark.py via the named
+#     `generator` (tests/fixtures/e2e_media.py / bench_media.py) using
+#     `generator_args`. Ground truth (`true_onset_ms`) is exact: it is the
+#     onset the generator was told to place the TTS phrase at, not anything
+#     measured back out of the file (DESIGN.md §15.2).
+#   real — an actual URL. `true_onset_ms` is null until hand-labeled by
+#     inspecting the audio in an editor (a one-time labeling act, DESIGN.md
+#     §15.2 — NOT something to guess at or infer). Skipped by default; only
+#     attempted with --include-real, and even then reported unscored until
+#     true_onset_ms is filled in.
+#
+# expected_status is what a correct system should report; onset_tolerance_ms
+# widens the default ±100ms/±500ms scoring bands for a scenario where the
+# ground truth itself carries known slack (documented per-case below).
+
+- id: clean_speech
+  description: >-
+    Clean speech, single occurrence, no noise or degradation — the baseline
+    every other scenario is a variant of.
+  kind: synthetic
+  generator: speech_video
+  generator_args: {phrase: "my mind rebels at stagnation", onsets: [1.5], frames: 60, fps: 10.0}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 1500
+  fps: 10.0
+  expected_status: FOUND
+
+- id: phrase_twice
+  description: >-
+    The query phrase is spoken twice in the same clip. A5 (DESIGN.md §3)
+    says the system should surface both and mark AMBIGUOUS rather than pick
+    silently; true_onset_ms is the earliest occurrence for onset-error
+    scoring against the winning candidate.
+  kind: synthetic
+  generator: speech_video
+  generator_args: {phrase: "my mind rebels at stagnation", onsets: [1.0, 10.0], frames: 180, fps: 10.0}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 1000
+  fps: 10.0
+  expected_status: AMBIGUOUS
+
+- id: phrase_absent
+  description: >-
+    Something is spoken, but not the queried phrase — the system must not
+    hallucinate a match against unrelated speech.
+  kind: synthetic
+  generator: speech_video
+  generator_args: {phrase: "my mind rebels at stagnation", onsets: [1.5], frames: 60, fps: 10.0}
+  dialogue: "purple elephants dance quietly"
+  true_onset_ms: null
+  fps: 10.0
+  expected_status: NOT_FOUND
+
+- id: no_audio
+  description: >-
+    Video stream with no audio stream at all (not silence) — exercises
+    MediaLoader's NO_AUDIO path, which the pipeline maps to NOT_FOUND
+    (DESIGN.md §12.2) without ever reaching the detector.
+  kind: synthetic
+  generator: no_audio
+  generator_args: {frames: 30, fps: 10}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: null
+  fps: 10.0
+  expected_status: NOT_FOUND
+
+- id: chunk_boundary
+  description: >-
+    The phrase's onset sits inside the overlap region between two ASR
+    chunks (config default asr.chunk_seconds=22.0, chunk_overlap_seconds=1.5,
+    so the overlap starts at 20.5s) — regression coverage for the
+    chunk-merge de-dup that Phase 3 unit-tests on mocked transcripts; here
+    it runs against a real chunked ASR call.
+  kind: synthetic
+  generator: speech_video
+  generator_args: {phrase: "my mind rebels at stagnation", onsets: [20.8], frames: 280, fps: 10.0}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 20800
+  fps: 10.0
+  expected_status: FOUND
+
+- id: background_music
+  description: >-
+    Speech over a synthesized two-tone music bed (mixed in under the clean
+    speech track, ~-16dB) instead of digital silence — stresses the VAD
+    onset check and match confidence under a non-silent background.
+  kind: synthetic
+  generator: background_music
+  generator_args: {phrase: "my mind rebels at stagnation", onset: 2.0, frames: 100, fps: 10.0, music_gain_db: -16.0}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 2000
+  fps: 10.0
+  expected_status: FOUND
+
+- id: low_bitrate_resolution
+  description: >-
+    Same speech clip, heavily re-encoded (160px-wide video at 60kbit/s,
+    16kbit/s AAC audio at 16kHz) — stresses ASR and frame extraction against
+    a degraded, low-quality source without moving the underlying onset.
+  kind: synthetic
+  generator: low_quality
+  generator_args: {phrase: "my mind rebels at stagnation", onset: 2.0, frames: 100, fps: 10.0}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 2000
+  fps: 10.0
+  expected_status: FOUND
+
+- id: vfr_clip
+  description: >-
+    Genuinely variable-frame-rate video (irregular per-frame durations,
+    DESIGN.md §9.2) with real speech at a known onset. frame_number is
+    expected to be null (D3 "where applicable"); scored on timestamp only,
+    not frame tolerance.
+  kind: synthetic
+  generator: vfr_speech
+  generator_args: {phrase: "my mind rebels at stagnation", onset: 3.0, repeats: 6}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 3000
+  fps: null
+  expected_status: FOUND
+
+- id: accent_variation
+  description: >-
+    A pitch-shifted re-render of the speech track (asetrate+atempo, factor
+    1.18) as a SYNTHETIC PROXY for accent/voice variation — not a real
+    accent. Generating genuine accented speech needs either a second TTS
+    voice (not guaranteed installed) or a real recording (no known ground
+    truth), neither of which is buildable with exact ground truth per
+    §15.2's synthetic-case rule. Onset ground truth carries a small amount
+    of extra slack from the time-stretch filter (documented, not measured
+    — expect roughly tens of ms of additional jitter beyond the other
+    synthetic cases).
+  kind: synthetic
+  generator: accent_proxy
+  generator_args: {phrase: "my mind rebels at stagnation", onset: 2.0, frames: 100, fps: 10.0, pitch_factor: 1.18}
+  dialogue: "my mind rebels at stagnation"
+  true_onset_ms: 2000
+  fps: 10.0
+  expected_status: FOUND
+  onset_tolerance_ms: 150
+
+- id: ok_ru_example
+  description: >-
+    The assignment's own example clip. NEEDS HAND-LABELING: true_onset_ms is
+    intentionally null — do not fabricate it. Label it by inspecting the
+    audio in an editor (DESIGN.md §15.2: "a one-time labeling act, not a
+    runtime dependency") and fill in true_onset_ms here once done. Skipped
+    by default (kind: real); pass --include-real to run it. Even then it is
+    reported unscored (status/timestamp only) until true_onset_ms is set.
+  kind: real
+  url: https://ok.ru/video/248244667877
+  dialogue: "My mind rebels at stagnation"
+  true_onset_ms: null
+  needs_hand_label: true
+  fps: null
+  expected_status: FOUND

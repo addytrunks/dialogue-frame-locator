@@ -276,3 +276,35 @@ C:\quest1\dialogue-frame-locator>uv run python -m dfl.cli --url https://www.yout
 I would like to see logs in between the steps while running the CLI please, because I am not seeing anything right now. It's just a 5 minute YT video that I've uploaded.
 I noticed that the downloading part takes time from your code, but when I did it from test.py, this is for the same YT video that I am talking about.
 Ok, this is all working perfectly for now, the problem that i see is that for longer videos, it takes time downloading, it takes time transcribing (because more number of chunks). How would you handle that? I would like to know this for future implementation.ASR early stopping makes sense, but I was thinking parallel processing, like as the chunks keep coming in, start processing them (like a queue)
+
+---
+
+## Phase 7 — Evaluation Harness & Docs
+
+You're implementing Phase 7 (evaluation harness + docs) — the final phase. Read DESIGN.md §15 in full, then read the actual pipeline/CLI from Phase 6 before writing anything.
+
+STANDING RULES:
+- Scope for THIS phase only: benchmark script, fixtures manifest, metrics table, PROMPTS.md finalization, README, APPROACH.md, and final pass on DESIGN.md. No new pipeline behavior — if you find a bug while building this, tell me rather than quietly patching pipeline code in this phase.
+- No OCR, no job queue, no HTTP API.
+- For the mini-benchmark manifest (§15.2): you can scaffold and fully build the SYNTHETIC cases yourself (TTS-inserted phrase at a programmatically-known timestamp — these give exact ground truth and don't need me). For any REAL clips (including the ok.ru example) that need a hand-labeled true onset, don't fabricate the ground-truth timestamp — scaffold the manifest entry and flag it as needing my hand-labeling, since that's a human judgment call the design doc explicitly says is a one-time labeling act, not something to guess at.
+- APPROACH.md is not a rewrite of DESIGN.md under a new name. DESIGN.md stays the full reference; APPROACH.md is a short narrative for someone who won't read all 21 sections — same substance at much higher altitude, pointing back to DESIGN.md for depth rather than restating it. If it starts creeping toward DESIGN.md's length, stop and cut it down.
+- README.md stays lean: environment setup and how to run the thing, nothing else. Design rationale and trade-offs belong in APPROACH.md/DESIGN.md — don't pull them into the README "for completeness." The one part of the README that must be complete, not lean, is environment setup: check the actual dependencies this repo ended up with (pyproject.toml, plus anything Phases 1/2/3/5 assumed at the system level) rather than guessing, and give concrete per-OS install commands — not "install ffmpeg," but the real brew/apt command — for ffmpeg/ffprobe and anything else that isn't a plain `pip install` (frame-decoding backend, VAD library, faster-whisper's first-run model download). Confirm the README does not mention Ollama anywhere — semantic-guard runs on OpenRouter as of the Phase 4 revision, so a leftover Ollama install step would be actively wrong, not just outdated clutter.
+- Do not write or edit DECISIONS.md.
+- Before writing code, append this entire prompt verbatim to PROMPTS.md under "## Phase 7 — Evaluation Harness & Docs".
+- When done, summarize and STOP.
+- Commit only this phase's work: "Phase 7: evaluation harness and docs".
+
+BUILD:
+- scripts/run_benchmark.py: runs the CLI over the fixtures manifest, computes WER (where applicable), phrase-match precision/recall, onset error (median/P90), tolerance-band accuracy (±100ms, ±500ms, ±1/±5 frames), and writes a results table.
+- tests/fixtures/manifest: cover the scenarios listed in §15.2 — clean speech, background music, accent, low bitrate/resolution, VFR clip, no-audio clip, phrase-absent clip, phrase-twice clip, phrase at a chunk boundary. Build what you can synthetically; flag the rest as needing my input.
+- APPROACH.md: a short narrative (a few minutes' read, not a re-read of DESIGN.md) covering the problem as understood, the handful of decisions that actually mattered and why (ASR-first with OCR deferred, cloud-primary + local-fallback ASR, PTS-based frame mapping over fps math, graded matching with an explicit AMBIGUOUS state), and what's deliberately out of scope. Link to DESIGN.md for anything requiring full depth instead of duplicating it.
+- README.md: quickstart and CLI usage only — install steps (with real per-OS commands, per the standing rule above), required env vars, one example invocation, exit codes. No rationale, no trade-off discussion.
+- Finalize PROMPTS.md (should now contain every phase prompt verbatim, appended contemporaneously — confirm nothing's missing).
+- Do a final read-through of DESIGN.md and flag (don't silently fix) any place where the actual implementation ended up diverging from what the design doc describes — I need to know about drift, not have it silently smoothed over.
+
+VALIDATION (§21 Phase 7):
+- Benchmark runs headless (no manual steps) over whatever fixtures exist.
+- Metrics report is generated and readable.
+- APPROACH.md exists and is materially shorter than DESIGN.md — not a restatement of its section headers.
+- README.md contains zero references to Ollama, and its install section has concrete commands (not generic "install X") for every non-pip dependency actually present in the repo.
+- README + PROMPTS.md + DESIGN.md satisfy D8-D10 from §2.1 — check this explicitly against the requirements table, don't just assume.

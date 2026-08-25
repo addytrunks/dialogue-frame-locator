@@ -2,138 +2,122 @@
 
 Given a video URL and a target dialogue line, find the exact frame at which
 that line is spoken — timestamp, frame number, matched text, confidence,
-and the rendered frame image. See `DESIGN.md` for the full architecture,
-rationale, and trade-offs, and `PROMPTS.md` for all LLM prompts used.
+and the rendered frame image. See [`../DESIGN.md`](../DESIGN.md) for the
+full architecture and rationale, [`APPROACH.md`](APPROACH.md) for the short
+version, and [`PROMPTS.md`](PROMPTS.md) for every LLM prompt used to build
+this.
 
-**Status:** media ingestion (Phase 1), exact frame extraction (Phase 2), ASR
-providers (Phase 3), phrase matching and confidence (Phase 4), and temporal
-refinement (Phase 5) are implemented. Pipeline wiring and the CLI are not —
-see `DESIGN.md` §21 for the phased roadmap.
+**Status:** all phases (media ingestion, frame extraction, ASR, matching,
+temporal refinement, pipeline/CLI, evaluation harness) are implemented.
 
-## ASR: cloud-primary, local fallback
+## Install
 
-`dfl.asr` turns audio into a word-level timestamped transcript. Every
-request is chunked (~20-25s, 1-2s overlap) regardless of clip length — the
-cloud provider enforces a ~60s per-request processing timeout, so this is a
-hard constraint, not a long-video optimization (`DESIGN.md` §7.5, A10).
+Requires **Python 3.11+** and two things outside `pip`/`uv`: the `ffmpeg`/
+`ffprobe` CLIs on `PATH`, and (only if you'll run `tests/fixtures/tts.py`-
+based tests or the benchmark's synthetic fixtures) Windows, since offline
+TTS there uses SAPI via PowerShell.
 
-- **`OpenRouterAsrProvider`** — the pinned cloud primary: OpenRouter serving
-  `openai/whisper-large-v3`, with the backing host explicitly pinned via
-  `provider.only` (never left to auto-routing, which can silently drop to
-  segment-only timestamps). Audio goes over the base64 `input_audio` JSON
-  path, not multipart, to stay clear of the 25MB multipart cap. The exact
-  response shape was confirmed by a live call against the real endpoint
-  (documented in `dfl/asr/openrouter_provider.py`), not assumed from docs.
-- **`FasterWhisperAsrProvider`** — the local fallback, same word-timed output
-  shape, plus a per-word confidence the cloud endpoint doesn't expose.
-- **`FailoverAsrProvider`** (`dfl.asr.base`) — wraps both behind the single
-  `AsrProvider` interface; a timeout/5xx/rate-limit from the primary
-  automatically retries the same chunk against the fallback. If both fail,
-  it raises `ASR_UNAVAILABLE` rather than returning a silently degraded
-  result (`DESIGN.md` §11).
-- **`dfl.asr.chunking`** — splits audio into overlapping chunks and merges
-  each chunk's transcript back into one de-duplicated, global-timeline word
-  list. A word spoken in the overlap between two chunks is transcribed
-  twice; ownership of that time range is split at the overlap's midpoint so
-  it survives the merge exactly once (§7.5).
-- **`AsrDetector`** (`dfl.detect.asr_detector`) — the `Detector` implementation
-  for this phase. It uses a minimal normalized exact/substring match to turn
-  the merged word stream into `Candidate`s; the fuzzy/phonetic/semantic
-  matching cascade is Phase 4's `match/matcher.py`, not this module.
+**1. Install ffmpeg/ffprobe** (used for media probing/audio extraction —
+`dfl.media.loader` — separately from the `av` PyPI package, which is
+Python bindings, not the CLI):
 
-## Temporal refinement: from a word span to `t*`
+| OS | Command |
+|---|---|
+| macOS | `brew install ffmpeg` |
+| Ubuntu/Debian | `sudo apt update && sudo apt install ffmpeg` |
+| Fedora | `sudo dnf install ffmpeg` |
+| Windows | `winget install Gyan.FFmpeg` (or `choco install ffmpeg` / `scoop install ffmpeg`) |
 
-`dfl.localize.refine` turns the matched span's start time `t0` into the onset
-`t*` that gets converted to a frame (`DESIGN.md` §6.4). Two signals, each
-bounding the other:
+Verify: `ffmpeg -version` and `ffprobe -version` both need to resolve on
+`PATH` — a fresh shell may be required after installing so the new `PATH`
+entry takes effect.
 
-- **VAD check (`dfl.localize.vad.SileroVad`)** — Silero VAD v6, run through
-  the ONNX copy that ships inside the already-pinned `faster-whisper` wheel:
-  a modern neural VAD for zero new dependencies and no download. If `t0`
-  isn't inside a speech region the candidate is flagged (`vad_ok=False`,
-  `vad_agreement=0.0`) and nothing is sharpened — that is the ASR-hallucination
-  guard. `vad_ok=False` is a **veto**, not a signal to average in: it caps
-  status at `AMBIGUOUS` and confidence at `match.confidence.vad_reject_ceiling`
-  (validated to stay below `tau_c`). It stops at `AMBIGUOUS` rather than
-  `NOT_FOUND` because a strong text match the VAD disputes is more often speech
-  the VAD missed — quiet dialogue under music, a whisper — than a hallucination
-  that happens to match the query; the timestamp stays visible for a human to
-  check. A weak match in silence still lands at `NOT_FOUND` via `tau_reject`.
-  If `t0` sits within `refine.snap.max_delta_seconds` of a speech-region start
-  — just after it (a late word timestamp) or just before it (an early one) —
-  the onset snaps onto that boundary. The bound is what keeps a phrase that
-  genuinely begins mid-utterance from being dragged to the sentence start, and
-  it must stay narrower than `refine.vad.window_pad_seconds` so the snap can
-  never land on the VAD window's own edge; config validation enforces that.
-- **Conditional forced alignment (`dfl.localize.alignment`)** — only when the
-  match was fuzzy or its timings were low-confidence, the query is aligned
-  against `[t0-1s, t_end+1s]` using Whisper's own cross-attention DTW
-  (`find_alignment`), i.e. the same mechanism that produces word timestamps,
-  pointed at known text. Best-effort by design: any failure degrades to `t0`.
-  Its result is held inside the VAD's speech region (Whisper's DTW stretches
-  the first aligned word back toward the window edge) and then refused
-  outright if it still sits more than `refine.alignment.max_shift_seconds`
-  from `t0` — refinement sharpens an onset, it does not relocate it. The
-  alignment model, device and compute type are config, and
-  `FasterWhisperForcedAligner.from_config(...)` takes an optional
-  `model_instance` so a pipeline can share the local ASR provider's Whisper
-  model instead of holding two in memory.
-
-`RefinedOnset` reports which branch ran (`word_timestamp` / `vad_snap` /
-`forced_alignment`), so the number is auditable rather than merely precise.
-`t*` is on the **audio** timeline; §9 converts it to a presentation frame.
-
-Both collaborators are one-method Protocols, so a different VAD or a
-purpose-built aligner (torchaudio MMS, MFA) drops in without touching the
-policy — the trade-offs behind picking these two are documented at the top of
-`localize/vad.py` and `localize/alignment.py`.
-
-## Frame extraction: the timestamp → frame convention
-
-`dfl.media.frames` maps an audio timestamp to a video frame by seeking to the
-keyframe at or before it and decoding forward to read the frame's **actual
-PTS** — never `round(t * fps)`, which is wrong for variable-frame-rate video
-and for containers whose timeline does not start at zero (`DESIGN.md` §9.2).
-
-The off-by-one convention is fixed and applied everywhere:
-
-> **The frame on screen at `t` is the frame with the greatest PTS ≤ `t`.**
-> A frame occupies the half-open interval `[pts_n, pts_{n+1})`, so a timestamp
-> landing exactly on a frame's PTS returns *that* frame, not its predecessor.
-
-`frame_number` is a 0-based presentation index derived from the PTS for
-reporting only; it is `null` on variable-frame-rate streams, where no stable
-integer index exists. `pts` is always canonical. Frames are written as
-lossless PNGs into the configured `output.dir`.
-
-**Two timelines.** `t` is on the *audio* timeline (seconds from the first
-sample of the extracted WAV — what ASR reports); `Frame.pts` is on the
-*container* timeline, which need not start at zero. `Frame.start_offset` is
-the distance between them, taken from the **audio stream's** `start_time`, not
-the format's — those differ whenever video starts before audio. Use
-`Frame.audio_time` (`pts - start_offset`) for anything compared against ASR
-timings or reported as `Result.time_seconds`; comparing a raw `pts` against an
-ASR timestamp is a multi-frame error on any file with A/V skew.
-
-Requires the `ffmpeg`/`ffprobe` CLI on `PATH` for media loading; the tests that
-need it skip themselves when it is absent.
-
-## Install (dev)
+**2. Install the Python project** (from `dialogue-frame-locator/`):
 
 ```bash
+# with uv (recommended — this repo ships a uv.lock)
+uv sync --extra dev
+
+# or with plain pip in a virtualenv
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-## CLI (stub — not yet functional)
+This pulls in `PyAV` (the `ffmpeg`-bindings-based frame decoder), `faster-
+whisper` (local ASR fallback), and everything else in `pyproject.toml` —
+no separately-installed VAD library: voice-activity detection runs on the
+Silero VAD v6 weights that ship inside the already-pinned `faster-whisper`
+wheel (`dfl/localize/vad.py`), at zero extra install cost.
+
+**3. Set `OPENROUTER_API_KEY`** — required for the primary cloud ASR path
+(`openai/whisper-large-v3` via OpenRouter) and the optional semantic-match
+guard. Put it in a `.env` file in `dialogue-frame-locator/` (never
+committed — already in `.gitignore`) or export it directly:
 
 ```bash
-python -m dfl.cli --url <video_url> --dialogue "<target line>" [--json]
+echo "OPENROUTER_API_KEY=sk-or-..." > .env
 ```
 
-Full flag reference: `python -m dfl.cli --help`.
+Without it, the pipeline still runs end-to-end on the local `faster-
+whisper` fallback (`--config` pointed at a copy of `config/default.yaml`
+with `asr.provider: local`, or set `asr.provider: local` directly).
+
+**First-run model download:** the local ASR fallback and the forced-
+alignment refinement step both download their model weights (via
+`faster-whisper`/Hugging Face) the first time they run, not at install
+time — expect a one-time delay and network access on first local-ASR or
+first alignment-triggering run.
+
+## Run
+
+```bash
+uv run python -m dfl.cli --url <video_url> --dialogue "<target line>" [--json]
+```
+
+Example:
+
+```bash
+uv run python -m dfl.cli \
+  --url https://ok.ru/video/248244667877 \
+  --dialogue "My mind rebels at stagnation"
+```
+
+Full flag reference: `uv run python -m dfl.cli --help`.
+
+Key flags: `--json` (machine-readable result object), `--out <dir>` (frame
+PNG output directory, default `./out`), `--config <path>` (override
+`config/default.yaml`), `--keep-media` (don't delete the downloaded temp
+file), `--max-video-height <px>` (cap download resolution).
+
+### Exit codes
+
+| Code | Status |
+|---|---|
+| 0 | `FOUND` |
+| 2 | `AMBIGUOUS` |
+| 3 | `NOT_FOUND` |
+| 4 | `PROCESSING_ERROR` |
 
 ## Tests
 
 ```bash
-pytest
+uv run pytest
 ```
+
+Some tests are opt-in (real model downloads / real TTS): see
+`tests/e2e/test_pipeline_e2e.py` and `tests/integration/
+test_forced_alignment.py` for their `DFL_RUN_E2E_MODEL_TEST=1` gate.
+
+## Benchmark
+
+```bash
+uv run python scripts/run_benchmark.py
+```
+
+Runs the CLI over `tests/fixtures/manifest.yaml` and writes
+`BENCHMARK_RESULTS.md` (repo root) plus `out/benchmark/results.json`.
+Defaults to the local `faster-whisper` ASR path (no API key, no network
+ASR call — fully headless); pass `--provider openrouter` for the
+production cloud-primary path, and `--include-real` to also attempt the
+manifest's real (non-synthetic) case. See the manifest and
+`scripts/run_benchmark.py --help` for details.
