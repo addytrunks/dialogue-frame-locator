@@ -22,3 +22,11 @@ PTS is the real source of truth, frame number doesn't matter.
 Error:audio timeline and video timeline are two different things. 
 Eg: If whisper says that target spoken at t = 10.0 s, that means 10 seconds after the beginning of the extracted audio.Suppose the audio stream originally started 0.5 seconds later than the video.Then the corresponding point in the video is not necessarily 10.0 on the container timeline.
 solution: add audio stream start offset
+
+PHASE 3:
+implementation of asr using operouter's whisper. 
+Why overlap the chunks?
+Each request is capped at ~20-25s of audio. If chunks were cut back-to-back with no overlap, a phrase spoken right at a hard cut point (eg: the words "at" / "stagnation" straddling second 22.0) would get physically split between two audio files — each chunk would hand the ASR model a half-word or half-phrase, which either transcribes badly or gets dropped near the edge (Whisper-family models are least reliable right at clip boundaries). Overlapping by 1-2s guarantees any boundary phrase appears whole in at least one of the two chunks. The cost is that the overlap region then gets transcribed twice, which is what merge_transcripts's de-dup step (midpoint-of-overlap ownership) cleans up before matching runs.
+Chunks are merged post overlapping along with de-duplication
+concern: the response output did not have segment metadata in it.
+solution: add 'segments' to timestamp_granularities in the body.

@@ -144,3 +144,8 @@ VALIDATION (§17.2, §21 Phase 3):
 - Chunk-boundary overlap de-dup test: a phrase split across two overlapping mocked chunks produces exactly one candidate, not two.
 - Failover test: mock OpenRouter raising timeout/5xx → assert faster-whisper fires automatically and the run completes.
 - Both-fail test: mock both providers failing → assert ASR_UNAVAILABLE/PROCESSING_ERROR, not a crash or a wrong-but-confident result.
+
+A few questions:
+1. Why is there a overlap of chunks?
+2.Regarding the missing segments in the response, you've missed adding segment to timestamp_granularities, check out @..\test.py for the syntax.
+3. Am i good to proceed to phase 4? Are there anything missing? any bugs?
