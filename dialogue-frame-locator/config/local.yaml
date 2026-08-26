@@ -1,0 +1,77 @@
+# Local-ASR variant of default.yaml — everything is identical except
+# asr.provider/asr.local.model, so `faster-whisper` (CPU/GPU, no network)
+# runs instead of the OpenRouter cloud primary. Use with --config config/local.yaml.
+
+asr:
+  provider: local # openrouter (primary) | local (faster-whisper fallback)
+  openrouter:
+    model: openai/whisper-large-v3
+    provider_pin: ["openai"] # backing hosts that honor verbose_json + word timestamps
+    api_key_env: OPENROUTER_API_KEY
+  local:
+    model: base
+  chunk_seconds: 22.0
+  chunk_overlap_seconds: 1.5
+  early_stop: false # D6 — off by default, correctness-preserving
+
+language:
+  default: en
+  auto_detect: false
+
+match:
+  thresholds:
+    tau_accept: 0.80
+    tau_reject: 0.40
+    delta: 0.05
+    tau_c: 0.60
+  weights:
+    lexical: 0.6
+    phonetic: 0.2
+    semantic: 0.2
+  semantic_guard:
+    enabled: false
+    provider: openrouter
+    model: openai/text-embedding-3-small
+    api_key_env: OPENROUTER_API_KEY
+    timeout_seconds: 15.0
+    max_candidates_to_score: 8
+  confidence:
+    weights:
+      match_score: 0.7
+      vad_agreement: 0.1
+      provider_confidence: 0.2
+    vad_agreement_placeholder: 1.0
+    vad_reject_ceiling: 0.50
+
+refine:
+  vad:
+    threshold: 0.5
+    min_speech_duration_ms: 100
+    min_silence_duration_ms: 200
+    speech_pad_ms: 0
+    tolerance_seconds: 0.20
+    window_pad_seconds: 2.0
+  snap:
+    enabled: true
+    max_delta_seconds: 0.25
+  alignment:
+    enabled: true
+    trigger_score: 0.80
+    trigger_word_confidence: 0.60
+    window_pad_seconds: 1.0
+    max_shift_seconds: 0.5
+    model: small
+    device: auto
+    compute_type: default
+
+media:
+  max_size_mb: 2048
+  max_duration_seconds: 14400
+  timeout_seconds: 3000
+  max_video_height: 720
+
+output:
+  dir: ./out
+
+detector:
+  default: asr

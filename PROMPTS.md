@@ -417,3 +417,8 @@ limitation.
   and check no other line moved.
 - Confirm `build_components()` is actually called by both cli.py's `_run()`
   and app.py — not reimplemented in either.
+Now that everything's done, I have a question, why is the asr part taking a bit of time, i want to confirm that these are the steps taking place? chunking -> transcribing -> phrase matching -> alignment/vad -> confidence? Where is the delay coming from? Like I see the chunks that are being processed is taking some time, where is this delay coming from?
+Wait, before that i got this error, when I was running the streamlit app,
+  [ASR_FAILED] OpenRouter response has no word-level 'words' array — was verbose_json + timestamp_granularities=['word'] honored by the pinned provider?
+Also, i want to try running the whisper model locally, how can i do that?
+ Ok, can you add an option of choosing a local/openrouter in the UI, the config files are available for both local as well as openrouter. And I have a question, is the local faster_whisper being downloaded locally?

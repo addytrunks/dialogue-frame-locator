@@ -43,9 +43,15 @@ _STATUS_DISPLAY: dict[Status, tuple[Any, str]] = {
 }
 
 
-def _default_config_path() -> Path:
+def _config_dir() -> Path:
     # app.py -> dialogue-frame-locator (repo root), same layout cli.py resolves.
-    return Path(__file__).resolve().parent / "config" / "default.yaml"
+    return Path(__file__).resolve().parent / "config"
+
+
+_ASR_CONFIGS: dict[str, str] = {
+    "OpenRouter (cloud, primary)": "default.yaml",
+    "Local (faster-whisper)": "local.yaml",
+}
 
 
 def _build_asr_provider(config: Config, language: str | None) -> AsrProvider:
@@ -202,11 +208,23 @@ def main() -> None:
     st.title("Dialogue -> Frame Locator")
     st.caption("Demo UI over the CLI pipeline (DESIGN.md §4.3 is the primary interface).")
 
+    config_label = st.selectbox(
+        "ASR backend",
+        options=list(_ASR_CONFIGS.keys()),
+        index=0,
+        help="Which config/*.yaml to use — determines asr.provider and its model.",
+    )
+    config_filename = _ASR_CONFIGS[config_label]
     try:
-        config = load_config(_default_config_path())
+        config = load_config(_config_dir() / config_filename)
     except ConfigError as exc:
-        st.error(f"Failed to load config/default.yaml: {exc}")
+        st.error(f"Failed to load config/{config_filename}: {exc}")
         return
+
+    if config.asr.provider == "local":
+        st.caption(f"Using local faster-whisper (model: {config.asr.local.model}) — no cloud ASR calls.")
+    else:
+        st.caption(f"Using OpenRouter (model: {config.asr.openrouter.model}), falling back to local on failure.")
 
     with st.form("locate_form"):
         url = st.text_input("Video URL", placeholder="https://example.com/video")
