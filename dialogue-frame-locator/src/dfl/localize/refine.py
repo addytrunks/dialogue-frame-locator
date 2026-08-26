@@ -119,17 +119,7 @@ def refine_onset(
 
     region, containment = _locate(t0, regions, config.vad.tolerance_seconds)
     if region is None:
-        _log.info("vad_reject t0=%.3f regions=%d", t0, len(regions))
-        return RefinedOnset(
-            t_star=t0,
-            t0=t0,
-            vad_ok=False,
-            vad_agreement=_AGREEMENT_NONE,
-            method=RefinementMethod.WORD_TIMESTAMP,
-            alignment_attempted=False,
-            alignment_used=False,
-            diagnostics={"reason": "onset_not_in_speech", "speech_regions": regions},
-        )
+        return _refine_without_vad_region(candidate, query, audio_path, config, aligner, t0, regions)
 
     agreement = _AGREEMENT_INSIDE if containment == "inside" else _AGREEMENT_NEAR
     diagnostics: dict[str, Any] = {"speech_region": region, "containment": containment}
@@ -176,6 +166,72 @@ def refine_onset(
         vad_agreement=agreement,
         method=method,
         alignment_attempted=should_align,
+        alignment_used=False,
+        diagnostics=diagnostics,
+    )
+
+
+def _refine_without_vad_region(
+    candidate: Candidate,
+    query: str,
+    audio_path: str,
+    config: RefineConfig,
+    aligner: ForcedAligner | None,
+    t0: float,
+    regions: list[tuple[float, float]],
+) -> RefinedOnset:
+    """VAD found no speech region at or near ``t0`` (§6.4 step 3's hallucination guard).
+
+    Usually correct — the classic failure is Whisper inventing text over a
+    music bed or room tone. But Silero can also miss a genuine, short/atypical
+    onset (e.g. a fricative right after a long silence), and a match that
+    already clears ``alignment.trigger_score`` is strong independent evidence
+    this is real speech, not a hallucination — the same bar the matcher itself
+    would accept outright. That candidate gets one forced-alignment attempt to
+    place the onset before falling back to rejecting it; a weaker match gets
+    no such benefit of the doubt (sharpening an answer we don't believe in
+    only makes it look precise).
+
+    No VAD region exists here to clamp the aligned onset to (§6.4 step 4's
+    usual bound), so the rescue relies on the same window/shift bounds
+    ``_accepted_alignment`` applies, without the region clamp.
+    """
+    diagnostics: dict[str, Any] = {"reason": "onset_not_in_speech", "speech_regions": regions}
+
+    attempt_rescue = (
+        config.alignment.enabled and aligner is not None and candidate.score >= config.alignment.trigger_score
+    )
+    if attempt_rescue:
+        assert aligner is not None
+        diagnostics["alignment_trigger"] = "vad_rejected_onset"
+        align_start = max(0.0, t0 - config.alignment.window_pad_seconds)
+        align_end = candidate.end_time + config.alignment.window_pad_seconds
+        aligned = _try_align(aligner, audio_path, align_start, align_end, query, diagnostics)
+        if (
+            aligned is not None
+            and align_start <= aligned <= align_end
+            and abs(aligned - t0) <= config.alignment.max_shift_seconds
+        ):
+            _log.info("alignment_rescued_vad_reject t0=%.3f t*=%.3f", t0, aligned)
+            return RefinedOnset(
+                t_star=aligned,
+                t0=t0,
+                vad_ok=True,
+                vad_agreement=_AGREEMENT_NEAR,
+                method=RefinementMethod.FORCED_ALIGNMENT,
+                alignment_attempted=True,
+                alignment_used=True,
+                diagnostics=diagnostics,
+            )
+
+    _log.info("vad_reject t0=%.3f regions=%d", t0, len(regions))
+    return RefinedOnset(
+        t_star=t0,
+        t0=t0,
+        vad_ok=False,
+        vad_agreement=_AGREEMENT_NONE,
+        method=RefinementMethod.WORD_TIMESTAMP,
+        alignment_attempted=attempt_rescue,
         alignment_used=False,
         diagnostics=diagnostics,
     )

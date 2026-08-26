@@ -99,17 +99,62 @@ def test_high_confidence_match_inside_speech_keeps_word_timestamp_onset():
 
 
 def test_onset_in_silence_is_rejected_by_the_vad_guard():
-    """§6.4 step 3: an ASR hallucination in silence must be distrusted, not sharpened."""
+    """§6.4 step 3: a weak/fuzzy match's onset in silence must be distrusted, not sharpened.
+
+    A *low*-score candidate here: a high-score one now gets one alignment
+    attempt before rejection (see test_high_confidence_match_rejected_by_vad_*
+    below) — a strong text match is independent evidence against hallucination
+    that a weak one doesn't have.
+    """
     vad = FakeVad([(20.0, 25.0)])  # nothing near t0=10.0
     aligner = FakeAligner(onset=10.4)
 
-    refined = refine_onset(make_candidate(), "i am your father", "a.wav", vad, make_config(), aligner)
+    refined = refine_onset(
+        make_candidate(score=0.62), "i am your father", "a.wav", vad, make_config(), aligner
+    )
 
     assert refined.vad_ok is False
     assert refined.vad_agreement == pytest.approx(0.0)
     assert refined.t_star == pytest.approx(10.0)  # reported unchanged, but flagged
     assert refined.method is RefinementMethod.WORD_TIMESTAMP
-    assert aligner.calls == [], "must not sharpen an onset the VAD does not believe in"
+    assert refined.alignment_attempted is False
+    assert aligner.calls == [], "must not sharpen a weak match the VAD does not believe in"
+
+
+def test_high_confidence_match_rejected_by_vad_is_rescued_via_alignment():
+    """A near-perfect text match is strong evidence against hallucination.
+
+    Silero can miss a genuine, short/atypical onset (e.g. a fricative right
+    after a long silence) — when that happens to a high-confidence match,
+    alignment gets one attempt to place the onset before giving up on it.
+    """
+    vad = FakeVad([(20.0, 25.0)])  # nothing near t0=10.0
+    aligner = FakeAligner(onset=10.4)  # within max_shift_seconds (0.5) of t0
+
+    refined = refine_onset(make_candidate(score=1.0), "i am your father", "a.wav", vad, make_config(), aligner)
+
+    assert refined.method is RefinementMethod.FORCED_ALIGNMENT
+    assert refined.alignment_attempted is True
+    assert refined.alignment_used is True
+    assert refined.t_star == pytest.approx(10.4)
+    assert refined.vad_ok is True
+    assert refined.vad_agreement == pytest.approx(0.5)
+    assert aligner.calls == [("a.wav", pytest.approx(9.0), pytest.approx(12.5), "i am your father")]
+
+
+def test_high_confidence_match_rejected_by_vad_stays_rejected_when_alignment_does_not_help():
+    """The rescue is bounded like any other alignment: it can't relocate the onset."""
+    vad = FakeVad([(20.0, 25.0)])  # nothing near t0=10.0
+    aligner = FakeAligner(onset=15.0)  # far outside max_shift_seconds of t0=10.0
+
+    refined = refine_onset(make_candidate(score=1.0), "i am your father", "a.wav", vad, make_config(), aligner)
+
+    assert refined.method is RefinementMethod.WORD_TIMESTAMP
+    assert refined.alignment_attempted is True
+    assert refined.alignment_used is False
+    assert refined.vad_ok is False
+    assert refined.vad_agreement == pytest.approx(0.0)
+    assert refined.t_star == pytest.approx(10.0)
 
 
 def test_low_score_match_triggers_forced_alignment_over_the_designed_window():
