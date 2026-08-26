@@ -1,10 +1,10 @@
 # Dialogue-to-Frame Localization
 
-> Give it a video URL + a line of dialogue → get back the exact **timestamp**, **frame number**, **matched text**, **confidence**, and the **rendered frame image**.
+> Give it a video URL + a line of dialogue -> get back the exact **timestamp**, **frame number**, **matched text**, **confidence**, and the **rendered frame image**.
 
 **Docs:** [`APPROACH.md`](APPROACH.md) (5-min read + diagram) · [`DESIGN.md`](DESIGN.md) (full spec) · [`PROMPTS.md`](PROMPTS.md) (every LLM prompt used) · [`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md) (metrics)
 
-**Status:** all phases shipped — media ingestion, frame extraction, ASR, matching, temporal refinement, pipeline/CLI, evaluation harness.
+**Status:** all phases shipped — media ingestion, frame extraction, ASR, matching, temporal refinement, pipeline/CLI, streamlit UI.
 
 > The Python project lives in **`dialogue-frame-locator/`** — `cd` into it before running any command below.
 
@@ -87,22 +87,15 @@ uv run python -m dfl.cli \
 
 ---
 
-## 3. Test & benchmark
-
-```bash
-uv run pytest                            # unit + integration + default e2e
-uv run python scripts/run_benchmark.py   # mini-benchmark → BENCHMARK_RESULTS.md
-```
-
-- Benchmark defaults to local ASR (headless, no API key/network call); `--provider openrouter` for the production cloud path, `--include-real` to also attempt the real (non-synthetic) manifest case.
-- Some tests are opt-in (real model downloads) — see `DFL_RUN_E2E_MODEL_TEST=1` in `tests/e2e/test_pipeline_e2e.py`.
-
----
-
-## 4. Optional demo UI
+## 3. Demo UI
 
 `app.py` is a thin Streamlit wrapper around the same `pipeline.run(...)` the CLI calls — it renders the same `Result` object, just with a form for inputs and a live status/log panel instead of terminal output. It's a convenience layer for live demoing, not a required deliverable: the CLI is the primary interface (DESIGN.md §4.3). Install it with `uv sync --extra demo` (or `pip install -e ".[demo]"`), then run:
 
 ```bash
 uv run streamlit run app.py
 ```
+
+Here's the demo,
+<video src="DEMO.mp4" controls width="100%">
+  Your browser does not support the video tag.
+</video>
