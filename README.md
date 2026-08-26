@@ -94,8 +94,3 @@ uv run python -m dfl.cli \
 ```bash
 uv run streamlit run app.py
 ```
-
-Here's the demo,
-<video src="DEMO.mp4" controls width="100%">
-  Your browser does not support the video tag.
-</video>
