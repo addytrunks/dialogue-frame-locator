@@ -10,8 +10,8 @@ asr:
     api_key_env: OPENROUTER_API_KEY
   local:
     model: base
-  chunk_seconds: 22.0
-  chunk_overlap_seconds: 1.5
+  chunk_seconds: 60.0
+  chunk_overlap_seconds: 3
   early_stop: false # D6 — off by default, correctness-preserving
 
 language:

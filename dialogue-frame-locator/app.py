@@ -13,6 +13,7 @@ so importing this module has no side effects.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -105,7 +106,7 @@ def _run_pipeline(
     keep_media: bool,
     out_dir: str,
     config: Config,
-) -> Result:
+) -> tuple[Result, float]:
     effective_language = language.strip() or config.language.default
 
     resolver = YtDlpMediaResolver()
@@ -132,6 +133,7 @@ def _run_pipeline(
         previous_level = logger.level
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
+        start = time.perf_counter()
         try:
             result = pipeline.run(
                 url,
@@ -148,13 +150,14 @@ def _run_pipeline(
                 keep_media=keep_media,
             )
         finally:
+            elapsed = time.perf_counter() - start
             logger.removeHandler(handler)
             logger.setLevel(previous_level)
         status.update(
-            label=f"Done — {result.status.value}",
+            label=f"Done — {result.status.value} ({elapsed:.1f}s)",
             state="error" if result.status is Status.PROCESSING_ERROR else "complete",
         )
-    return result
+    return result, elapsed
 
 
 def _render_candidates(candidates: list[Candidate]) -> None:
@@ -168,9 +171,10 @@ def _render_candidates(candidates: list[Candidate]) -> None:
     )
 
 
-def _render_result(result: Result) -> None:
+def _render_result(result: Result, processing_time: float) -> None:
     badge_fn, label = _STATUS_DISPLAY[result.status]
     badge_fn(f"Status: {label}")
+    st.caption(f"Processing time: {processing_time:.1f}s")
 
     if result.status in (Status.FOUND, Status.AMBIGUOUS) and result.timestamp is not None:
         col1, col2, col3 = st.columns(3)
@@ -255,8 +259,8 @@ def main() -> None:
         st.warning("Video URL and target dialogue are both required.")
         return
 
-    result = _run_pipeline(url.strip(), dialogue, language, match_threshold, keep_media, out_dir, config)
-    _render_result(result)
+    result, elapsed = _run_pipeline(url.strip(), dialogue, language, match_threshold, keep_media, out_dir, config)
+    _render_result(result, elapsed)
 
 
 if __name__ == "__main__":
