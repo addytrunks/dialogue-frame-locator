@@ -60,8 +60,8 @@ uv run python -m dfl.cli --url <video_url> --dialogue "<target line>" [--json]
 
 ```bash
 uv run python -m dfl.cli \
-  --url https://ok.ru/video/248244667877 \
-  --dialogue "My mind rebels at stagnation"
+  --url https://youtu.be/FHyWBFyhU-w \
+  --dialogue "She said you are a brilliant, undiscoverd mind"
 ```
 
 **Useful flags:**
