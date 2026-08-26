@@ -96,3 +96,13 @@ uv run python scripts/run_benchmark.py   # mini-benchmark → BENCHMARK_RESULTS.
 
 - Benchmark defaults to local ASR (headless, no API key/network call); `--provider openrouter` for the production cloud path, `--include-real` to also attempt the real (non-synthetic) manifest case.
 - Some tests are opt-in (real model downloads) — see `DFL_RUN_E2E_MODEL_TEST=1` in `tests/e2e/test_pipeline_e2e.py`.
+
+---
+
+## 4. Optional demo UI
+
+`app.py` is a thin Streamlit wrapper around the same `pipeline.run(...)` the CLI calls — it renders the same `Result` object, just with a form for inputs and a live status/log panel instead of terminal output. It's a convenience layer for live demoing, not a required deliverable: the CLI is the primary interface (DESIGN.md §4.3). Install it with `uv sync --extra demo` (or `pip install -e ".[demo]"`), then run:
+
+```bash
+uv run streamlit run app.py
+```
