@@ -61,3 +61,6 @@ Implementation of temporal refinement. The goal is to get hold of much more prec
       vad snap = ensures that the onset time isn't ahead of the actual onset. eg: if vad says speech started around 10s, but the target is around 10.5, then t* should be 10.5 and not 10
 
 I looked into the idea of downloading just the audio file first, process it,extract the timestamp, and download the only the frame at that timestamp to increase the download speed. But as mentioned in phase 2, audio timelines and video timelines are two different things, there's no inherent relationship between those two.
+
+PHASE 8 (optional):
+Added app.py, a Streamlit UI that just calls pipeline.run() and renders the Result — no new logic. This intentionally contradicts DESIGN.md ("Web UI ... explicitly NOT required for v1"); the CLI is still the primary interface, this only exists to make live demoing easier in an interview setting.

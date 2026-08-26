@@ -342,3 +342,78 @@ VALIDATION (§21 Phase 7):
 - README.md contains zero references to Ollama, and its install section has concrete commands (not generic "install X") for every non-pip dependency actually present in the repo.
 - README + PROMPTS.md + DESIGN.md satisfy D8-D10 from §2.1 — check this explicitly against the requirements table, don't just assume.
 I have a question, we seem to be downloading the entire video first and then processing it, why? We could just download the audio file first, process it, extract the timestamp and then download the video frame at that timestamp right?
+In the @dialogue-frame-locator/scripts/calibrate_transcript.py, i want to be able to see the PTS from t* in the output, i dont think that's being done.
+
+## Phase 8 (optional, post-Phase-6) — Streamlit demo UI
+
+**Before writing anything:** read the current `src/dfl/cli.py`, `src/dfl/config.py`,
+and `config/default.yaml` to confirm actual component class names, constructor
+signatures, and the real default for `match.thresholds.tau_accept`. Do not
+assume names from DESIGN.md prose match the implemented code.
+
+**Objective:** thin, read-only presentation layer over the existing pipeline.
+CLI remains the primary interface. No new business logic.
+
+**Composition (revised — avoid duplicating the composition root):**
+- In `cli.py`, extract the existing component-construction logic currently
+  inline in `_run()` into one new public function, e.g.
+  `build_components(config) -> PipelineComponents` (or equivalent — match
+  whatever shape `_run()` already builds). This must be a pure hoist: same
+  lines, same order, zero behavior change. Do not touch anything else in
+  cli.py, and do not touch pipeline.py/contracts.py/detect/asr/match/media/localize.
+- `app.py` imports and calls `build_components()` — it does not re-implement
+  resolver/provider/matcher/detector/extractor/VAD/aligner construction.
+- If, after reading the actual code, this hoist looks larger or riskier than
+  expected, stop and report back before proceeding — don't fall back to
+  silent duplication as a workaround.
+
+**File:** `app.py`, repo root, sibling to `pyproject.toml`.
+- `main()` containing all Streamlit calls, invoked only under
+  `if __name__ == "__main__":` (streamlit run executes the script as
+  `__main__`, so this holds; keeps import side-effect-free).
+- Wrap **both** `load_config()` and `build_components()` in try/except —
+  not just config loading. Component construction (e.g., local model loads,
+  missing `OPENROUTER_API_KEY`) can fail outside `pipeline.run()`'s
+  "never raises" contract; catch and render as an error state, don't let
+  it crash the app.
+
+**Form fields:** URL, target dialogue, language (default auto), detector
+(select box, greyed if only `asr` exists), match threshold (slider,
+default = actual `tau_accept` from config, not assumed), keep_media
+(checkbox), output dir (default `./out`).
+
+**Progress:** attach a `logging.Handler` to the `"dfl"` logger for the
+duration of the call, streaming records into `st.status(..., expanded=True)`,
+removed in `finally`. Document in DECISIONS.md that this is single-session-safe
+only — concurrent tabs can interleave log output — and that's an accepted
+demo-only limitation, not a bug to fix here.
+
+**Result rendering:** color-coded status badge; timestamp/frame
+(`"n/a (VFR)"` not bare `None`)/confidence; matched_text vs query in two
+columns; `st.image` of the PNG; `st.dataframe` of ranked candidates when
+AMBIGUOUS; plain `error.code`/`error.message` on PROCESSING_ERROR.
+No hardcoded example defaults beyond placeholder text.
+
+**Dependency:** `streamlit==1.62.0` (verify this is actually current/available
+before pinning) under `[project.optional-dependencies].demo`.
+
+**Test:** `tests/unit/test_app_import.py` — import `app`, assert `main`
+exists, assert nothing executed at import time. If `streamlit` isn't
+installed in the base test environment, explicitly skip
+(`pytest.importorskip("streamlit")`) rather than fail — confirm which CI
+job, if any, installs the `demo` extra, and if none does, add one or accept
+this test only runs locally.
+
+**Docs:** one paragraph in README.md (what it is, `streamlit run app.py`,
+explicit note it's convenience-only, CLI is primary per §4.3); one line in
+DECISIONS.md noting the deliberate exception to §2.3 and the log-interleaving
+limitation.
+
+**Validation:**
+- `streamlit run app.py` launches clean.
+- ok.ru example through the UI matches `localize --json` output for the
+  same inputs, field for field.
+- Confirm the only src/dfl change is the pure hoist in cli.py — diff it
+  and check no other line moved.
+- Confirm `build_components()` is actually called by both cli.py's `_run()`
+  and app.py — not reimplemented in either.

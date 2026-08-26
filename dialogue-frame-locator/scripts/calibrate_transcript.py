@@ -44,12 +44,18 @@ from dfl.asr.chunking import merge_transcripts  # noqa: E402
 from dfl.asr.faster_whisper_provider import FasterWhisperAsrProvider  # noqa: E402
 from dfl.asr.openrouter_provider import OpenRouterAsrProvider, load_api_key  # noqa: E402
 from dfl.config import Config, load_config  # noqa: E402
+from dfl.localize.alignment import FasterWhisperForcedAligner  # noqa: E402
+from dfl.localize.refine import refine_onset  # noqa: E402
+from dfl.localize.vad import SileroVad  # noqa: E402
 from dfl.logging import setup_logging  # noqa: E402
 from dfl.match.confidence import decide  # noqa: E402
 from dfl.match.matcher import CascadeMatcher  # noqa: E402
 from dfl.match.semantic_guard import OpenRouterSemanticGuard  # noqa: E402
+from dfl.media.errors import MediaError  # noqa: E402
+from dfl.media.frames import PyAvFrameExtractor  # noqa: E402
 from dfl.media.loader import DownloadFn, YtDlpMediaLoader, _format_spec  # noqa: E402
 from dfl.media.resolver import YtDlpMediaResolver, _chrome_impersonate_target  # noqa: E402
+from dfl.pipeline import _format_timestamp  # noqa: E402
 from dfl.secrets import read_env_key  # noqa: E402
 
 DEFAULT_CONFIG = REPO_ROOT / "config" / "default.yaml"
@@ -64,6 +70,12 @@ def _cache_key(url: str) -> str:
 
 def _transcript_path(cache_dir: Path, url: str) -> Path:
     return cache_dir / "transcripts" / f"{_cache_key(url)}.json"
+
+
+def _media_dir(cache_dir: Path, url: str) -> Path:
+    """Same layout YtDlpMediaLoader writes to (media.cache_dir/<hash>/...) --
+    where `fetch`'s persistent cache left the WAV + raw video, if it's still there."""
+    return cache_dir / "media" / _cache_key(url)
 
 
 def _format_bytes(n: float | None) -> str:
@@ -312,6 +324,45 @@ def cmd_match(args: argparse.Namespace) -> int:
             f"  [{c.start_time:8.2f}s - {c.end_time:7.2f}s] score={c.score:.3f} "
             f"text={c.text!r} extra={ {k: round(v, 3) if isinstance(v, float) else v for k, v in c.extra.items()} }"
         )
+
+    if result.best is None:
+        return 0
+
+    media_dir = _media_dir(cache_dir, args.url)
+    wav_path = media_dir / "audio.wav"
+    if not wav_path.exists():
+        print(f"(t* refinement skipped: no cached audio at {wav_path} -- `fetch` must have run with "
+              f"the same --cache-dir for this to be available)")
+        return 0
+
+    vad = SileroVad(config.refine.vad)
+    aligner = None
+    if config.refine.alignment.enabled and not args.no_align:
+        aligner = FasterWhisperForcedAligner.from_config(config.refine.alignment, language=config.language.default)
+
+    refined = refine_onset(result.best, args.query, str(wav_path), vad, config.refine, aligner=aligner)
+    print(f"t0 (raw match onset) : {refined.t0:.3f}s  ({_format_timestamp(refined.t0)})")
+    print(f"t*  (refined onset)  : {refined.t_star:.3f}s  ({_format_timestamp(refined.t_star)})  "
+          f"[{refined.method.value}, vad_ok={refined.vad_ok}, vad_agreement={refined.vad_agreement}]")
+
+    raw_candidates = sorted(media_dir.glob("source.*"))
+    if not raw_candidates:
+        print(f"(video PTS unavailable: no cached video file under {media_dir})")
+        return 0
+
+    try:
+        extractor = PyAvFrameExtractor()
+        frame = extractor.frame_at_path(str(raw_candidates[0]), refined.t_star)
+        frame_no = frame.frame_number if frame.frame_number is not None else "N/A (VFR)"
+        print(f"video PTS            : {frame.pts:.3f}s  ({_format_timestamp(frame.pts)})  "
+              f"(frame {frame_no}, container start_offset={frame.start_offset:.3f}s)")
+        if args.save_frame:
+            out_dir = str(cache_dir / "frames")
+            png_path = extractor.write_png(frame, out_dir)
+            print(f"frame written to     : {png_path}")
+    except MediaError as exc:
+        print(f"(frame extraction failed: {exc})")
+
     return 0
 
 
@@ -341,6 +392,11 @@ def build_parser() -> argparse.ArgumentParser:
     match.add_argument("--semantic-guard", action="store_true", dest="semantic_guard",
                         help="Enable the (network-calling) semantic guard tie-breaker for this run.")
     match.add_argument("--top", type=int, default=5, help="How many ranked candidates to print (default: 5).")
+    match.add_argument("--no-align", action="store_true", dest="no_align",
+                        help="Skip forced alignment even if refine.alignment.enabled is true in config "
+                             "(faster iteration; VAD snap still runs).")
+    match.add_argument("--save-frame", action="store_true", dest="save_frame",
+                        help="Write the frame at t* as a PNG under <cache-dir>/frames/.")
     match.set_defaults(func=cmd_match)
 
     return parser
