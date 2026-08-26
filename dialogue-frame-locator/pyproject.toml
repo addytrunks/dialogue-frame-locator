@@ -27,6 +27,10 @@ dependencies = [
 dev = [
     "pytest==8.3.3",
 ]
+demo = [
+    "streamlit==1.62.0",  # Phase 8: optional read-only UI over pipeline.run() (DESIGN.md §2.3
+                          # exception, see DECISIONS.md) — not required for the CLI (D1-D11).
+]
 
 [project.scripts]
 localize = "dfl.cli:main"

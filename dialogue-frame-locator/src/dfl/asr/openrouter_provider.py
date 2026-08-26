@@ -32,6 +32,19 @@ is correct). This provider still only requests ``["word"]`` and this parser
 still only reads ``words``, because word-level timestamps are this phase's
 whole scope (§21 Phase 3); ``segments``' avg_logprob/no_speech_prob is a
 candidate input for Phase 4's confidence fusion (§10.5), not consumed here.
+
+Live-verified 2026-08-26 against a chunk with no speech (a clip's trailing
+~2.3s tail, mostly silence): the response omits ``words`` entirely rather
+than returning an empty list —
+
+    {"text": "", "task": "transcribe", "language": "en", "duration": 2.293, "usage": {...}}
+
+Chunking is mandatory for every request (A10), so a short/silent tail chunk
+like this is routine, not exceptional — every chunk boundary that happens to
+land on silence hits this shape. The parser below treats a missing ``words``
+key as a legitimate empty transcript when ``text`` is also empty, and only
+raises when ``words`` is missing despite non-empty ``text`` (that would mean
+verbose_json/word-timestamps genuinely weren't honored).
 """
 
 from __future__ import annotations
@@ -111,7 +124,7 @@ class OpenRouterAsrProvider:
 
         response = self._post(body)
         self._raise_for_status(response)
-        return _parse_response(_decode_json(response), provider=self.name)
+        return _parse_response(_decode_json(response), provider=self.name, raw_body=response.text)
 
     def _post(self, body: dict[str, Any]) -> httpx.Response:
         try:
@@ -150,15 +163,20 @@ def _decode_json(response: httpx.Response) -> dict[str, Any]:
         raise AsrError(ErrorCode.ASR_PROVIDER_ERROR, f"OpenRouter returned malformed JSON: {exc}") from exc
 
 
-def _parse_response(data: dict[str, Any], provider: str) -> WordTimedTranscript:
+def _parse_response(data: dict[str, Any], provider: str, raw_body: str) -> WordTimedTranscript:
     """Parse the response shape confirmed live (see module docstring)."""
     words_raw = data.get("words")
+    if words_raw is None and not data.get("text"):
+        # No speech in this chunk: the endpoint omits `words` rather than
+        # returning `[]` (module docstring, live-verified 2026-08-26). Routine
+        # for a short/silent chunk boundary, not a parsing failure.
+        return WordTimedTranscript(words=[], language=data.get("language") or "unknown", provider=provider)
     if not isinstance(words_raw, list):
         raise AsrError(
             ErrorCode.ASR_FAILED,
             "OpenRouter response has no word-level 'words' array — was "
             "verbose_json + timestamp_granularities=['word'] honored by the "
-            "pinned provider?",
+            f"pinned provider? raw response: {raw_body[:_MAX_ERROR_BODY_CHARS]}",
         )
 
     try:

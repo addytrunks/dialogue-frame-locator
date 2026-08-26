@@ -37,8 +37,9 @@ def _client(handler) -> httpx.Client:
 
 
 def test_parses_golden_fixture_into_word_timed_transcript() -> None:
-    data = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    transcript = _parse_response(data, provider="openrouter")
+    raw_text = FIXTURE.read_text(encoding="utf-8")
+    data = json.loads(raw_text)
+    transcript = _parse_response(data, provider="openrouter", raw_body=raw_text)
 
     assert transcript.provider == "openrouter"
     assert transcript.language == "en"
@@ -119,6 +120,25 @@ def test_missing_words_array_raises_asr_failed() -> None:
     with pytest.raises(AsrError) as exc_info:
         provider.transcribe(_chunk())
     assert exc_info.value.code == ErrorCode.ASR_FAILED
+
+
+def test_silent_chunk_with_no_words_and_empty_text_is_not_an_error() -> None:
+    # Live-verified shape (module docstring): a chunk with no speech gets back
+    # {"text": "", ...} with `words` omitted entirely, not `[]`. That must
+    # parse to an empty transcript, not raise ASR_FAILED — every chunk
+    # boundary landing on silence (routine for a clip's trailing chunk) would
+    # otherwise fail the whole run.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"text": "", "task": "transcribe", "language": "en", "duration": 2.293, "usage": {}},
+        )
+
+    provider = OpenRouterAsrProvider(CONFIG, api_key="k", client=_client(handler))
+    transcript = provider.transcribe(_chunk())
+
+    assert transcript.words == []
+    assert transcript.language == "en"
 
 
 def test_load_api_key_reads_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
