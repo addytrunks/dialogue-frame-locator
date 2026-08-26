@@ -53,9 +53,9 @@ match:
     # when absent (the pinned OpenRouter path), weight is redistributed
     # across the remaining signals.
     weights:
-      match_score: 0.7
+      match_score: 0.75
       vad_agreement: 0.1
-      provider_confidence: 0.2
+      provider_confidence: 0.15
     vad_agreement_placeholder:
       1.0 # neutral value used when no VAD check has run
       # (dfl.localize.refine supplies the real one)

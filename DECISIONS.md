@@ -45,7 +45,7 @@ character similarity
       ↓
 phonetic similarity
       ↓
-optional semantic similarity
+optional semantic similarity 
       ↓
 combined score
       ↓
@@ -53,7 +53,7 @@ remove duplicates
       ↓
 return candidates
 Switched from ollama to openrouter for semantic similarity to stay consistent.
-
+Semantic similarity is applied to the top n candidates after lexical and phonetic, we can't apply to every single one, that's just using up a lot of compute. 
 PHASE 5 (I believe this has been over-engineered)
 Implementation of temporal refinement. The goal is to get hold of much more precise timestamps by the following steps:
       silero for voice-activity-detecion (vad) -> strip away silence regions
@@ -61,6 +61,17 @@ Implementation of temporal refinement. The goal is to get hold of much more prec
       vad snap = ensures that the onset time isn't ahead of the actual onset. eg: if vad says speech started around 10s, but the target is around 10.5, then t* should be 10.5 and not 10
 
 I looked into the idea of downloading just the audio file first, process it,extract the timestamp, and download the only the frame at that timestamp to increase the download speed. But as mentioned in phase 2, audio timelines and video timelines are two different things, there's no inherent relationship between those two.
+BUG: because vad detected silence near a candidate it's immediately flagged as ambiguous even when the match_score is a confident. (detected by me)
+FIX: Run the forced-alignment even when VAD is flagged.
 
 PHASE 8 (optional):
 Added app.py, a Streamlit UI that just calls pipeline.run() and renders the Result — no new logic. This intentionally contradicts DESIGN.md ("Web UI ... explicitly NOT required for v1"); the CLI is still the primary interface, this only exists to make live demoing easier in an interview setting.
+
+Testing local whisper model with larger chunk size and overlap => faster than openrouter
+variants tested
+tiny -> 74mb
+base -> 141mb
+small -> 463mb
+large -> 3.74GB
+
+Local model spits out the confidence scores along with the confidence scores which is used to compute the final matching score.
