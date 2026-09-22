@@ -14,10 +14,11 @@ reimplemented here.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from typing import Sequence
 
-from dfl.asr.base import AsrProvider, WordTimedTranscript
+from dfl.asr.base import AsrProvider, FailoverAsrProvider, WordTimedTranscript
 from dfl.asr.chunking import AudioChunk, merge_transcripts
 from dfl.contracts import Candidate, MediaHandle
 from dfl.logging import get_stage_logger
@@ -70,23 +71,53 @@ class AsrDetector:
             "splitting audio into %d chunk(s) (~%.1fs each, %.1fs overlap)",
             len(chunks), self._chunk_seconds, self._chunk_overlap_seconds,
         )
-        transcripts: list[WordTimedTranscript] = []
-        chunk_providers: list[str] = []
-        self.last_chunk_providers = {}
-        for i, chunk in enumerate(chunks):
-            _log.info(
-                "transcribing chunk %d/%d [%.1fs-%.1fs]", i + 1, len(chunks), chunk.start_time, chunk.end_time
-            )
-            transcript = self._provider.transcribe(chunk)
-            transcripts.append(transcript)
-            # FailoverAsrProvider tracks which concrete provider actually
-            # served the call; a bare provider just reports its own name.
-            provider = getattr(self._provider, "last_provider", None) or self._provider.name
-            chunk_providers.append(provider)
-            self.last_chunk_providers[chunk.index] = provider
-            _log.info(
-                "chunk %d/%d done via %s (%d word(s))", i + 1, len(chunks), provider, len(transcript.words)
-            )
+        # ponytail: chunks are independent — merge_transcripts re-assembles
+        # them by time window, not by call order — so transcribe them
+        # concurrently instead of one HTTP/model call at a time. Only the
+        # cloud path (FailoverAsrProvider, wrapping openrouter + a local
+        # fallback) benefits: those are independent network waits, and the
+        # cap (8, scaled down for short clips) is a conservative guess at
+        # what won't trip rate limits, not a measured number. A bare local
+        # provider (config/local.yaml, no failover) holds one lazily-loaded
+        # WhisperModel — hitting it from N threads on the first call makes
+        # every thread load its own copy at once, which is slower, not
+        # faster, so that case stays serialized at 1 worker.
+        if isinstance(self._provider, FailoverAsrProvider):
+            max_workers = min(8, len(chunks))
+        else:
+            max_workers = 1
+        _log.info("transcribing %d chunk(s) with %d worker(s)", len(chunks), max_workers)
+
+        transcripts: list[WordTimedTranscript | None] = [None] * len(chunks)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_to_index = {
+                pool.submit(self._provider.transcribe, chunk): i for i, chunk in enumerate(chunks)
+            }
+            completed = 0
+            # as_completed yields each future as it finishes (real chunk-by-
+            # chunk progress in the terminal), not all at once like pool.map
+            # would — completion order isn't chunk order, so results are
+            # filed back into `transcripts` by their original index and
+            # only read out (in order) after every one has landed.
+            for future in as_completed(future_to_index):
+                i = future_to_index[future]
+                chunk = chunks[i]
+                transcript = future.result()
+                transcripts[i] = transcript
+                completed += 1
+                _log.info(
+                    "chunk %d/%d [%.1fs-%.1fs] done via %s (%d word(s)) — %d/%d complete",
+                    i + 1, len(chunks), chunk.start_time, chunk.end_time,
+                    transcript.provider, len(transcript.words), completed, len(chunks),
+                )
+
+        # transcript.provider is set by whichever concrete provider actually
+        # served the call (openrouter/faster_whisper) — reading it off the
+        # returned object, rather than FailoverAsrProvider.last_provider,
+        # is what makes this safe to parallelize (last_provider is one
+        # shared mutable attribute all threads would stomp on).
+        chunk_providers = [t.provider for t in transcripts]
+        self.last_chunk_providers = {chunk.index: provider for chunk, provider in zip(chunks, chunk_providers)}
 
         words = merge_transcripts(chunks, transcripts)
         language = next((t.language for t in transcripts if t.language and t.language != "unknown"), "unknown")
